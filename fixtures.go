@@ -2,7 +2,9 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"io/fs"
+	"os"
 	"strings"
 
 	"github.com/uptrace/bun"
@@ -11,7 +13,7 @@ import (
 
 // Fixtures manages fixtures and seeds
 type Fixtures struct {
-	dir        fs.FS
+	dirs       []fs.FS
 	db         *bun.DB
 	truncate   bool
 	drop       bool
@@ -27,7 +29,7 @@ type FixtureOption func(s *Fixtures)
 // WithFS will truncate tables
 func WithFS(dir fs.FS) FixtureOption {
 	return func(s *Fixtures) {
-		s.dir = dir
+		s.dirs = append(s.dirs, dir)
 	}
 }
 
@@ -110,7 +112,16 @@ func (s *Fixtures) Load(ctx context.Context) error {
 		s.init()
 	}
 
-	return fs.WalkDir(s.dir, ".", func(path string, d fs.DirEntry, err error) error {
+	var err error
+	for _, dir := range s.dirs {
+		err = errors.Join(s.load(ctx, dir))
+	}
+
+	return err
+}
+
+func (s *Fixtures) load(ctx context.Context, dir fs.FS) error {
+	return fs.WalkDir(dir, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -133,5 +144,17 @@ func (s *Fixtures) Load(ctx context.Context) error {
 
 // LoadFile will load a file
 func (s *Fixtures) LoadFile(ctx context.Context, file string) error {
-	return s.fixture.Load(ctx, s.dir, file)
+	var err error
+	for _, dir := range s.dirs {
+		err = s.fixture.Load(ctx, dir, file)
+		if err == nil {
+			return nil
+		}
+
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+
+	return os.ErrNotExist
 }
