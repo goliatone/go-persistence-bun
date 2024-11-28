@@ -69,8 +69,8 @@ func WithFileFilter(fn func(path, name string) bool) FixtureOption {
 	}
 }
 
-// NewSeeManager generates a new seed manger
-func NewSeeManager(db *bun.DB, opts ...FixtureOption) *Fixtures {
+// NewSeedManager generates a new seed manger
+func NewSeedManager(db *bun.DB, opts ...FixtureOption) *Fixtures {
 	s := &Fixtures{
 		db:      db,
 		opts:    opts,
