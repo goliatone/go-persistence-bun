@@ -1,0 +1,236 @@
+#!/bin/bash
+
+# Check for -debug flag
+if [[ $* == *-debug* ]]; then
+    set -x
+fi
+
+export LGR_NO_TIMESTAMP=true
+
+VERSION_FILE="./.version"
+
+# If we have a .taskenv file load it as source
+if [ -f .taskenv ]; then
+    # shellcheck disable=SC1091
+    source .taskenv
+fi
+
+# This makes all bin packages installed via npm available here
+# e.g. bogota, nyc, autocannon, etc.
+PATH=$(pwd)/node_modules/.bin:$PATH
+
+# This will make all scripts available in the ./src/bin directory
+PATH=$(pwd)/src/bin:$PATH
+
+
+#################################################
+# Development dependencies
+#################################################
+
+function _install:lgr {
+    mkdir -p bin
+    if hash lgr 2>/dev/null; then
+        lgr OK "lgr already installed..."
+    else
+        echo "Installing lgr"
+        brew tap goliatone/homebrew-tap
+        brew install lgr
+        lgr OK "lgr installed..."
+    fi
+}
+
+function _install:brew {
+    if [[ $(command -v brew) == "" ]]; then
+        lgr I "Installing Hombrew"
+        /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+    else
+        lgr I "Updating Homebrew"
+        brew update
+    fi
+}
+
+function _install:envset {
+    if hash envset 2>/dev/null; then
+        lgr OK "envset installed..."
+    else
+        lgr I "Installing envset..."
+        brew install envset
+        lgr OK "envset installed..."
+    fi
+}
+
+##########################################
+# Application management
+##########################################
+
+function dev:install {
+    cd "$(pwd)/src" || exit "$?"
+
+    _install:lgr
+    _install:brew
+
+    _install:envset
+
+    lgr ok "dependencies intalled..."
+}
+
+function dev:env:load {
+    eval "$(envset development --isolated=true)"
+}
+
+
+##
+## ########################################
+##           Version Management
+## ########################################
+
+##
+## -----
+##
+## version:upsert
+##
+## Save version to meta file.
+## First time will create file if not present
+##
+## Arguments:
+## @arg 1 {string} [tag=0.0.1]
+function version:upsert {
+    local tag=${1}
+
+    if [ -z "$tag" ]; then
+        version:get
+    else
+        version:set "$tag"
+        version:get
+    fi
+}
+
+##
+## -----
+##
+## version:get
+##
+## Get version from meta file.
+function version:get {
+
+    test -f "${VERSION_FILE}" || touch "${VERSION_FILE}"
+
+    local tag
+    tag=$(cat "${VERSION_FILE}")
+
+    if [ -z "$tag" ]; then
+        tag="0.0.1"
+        version:set "$tag"
+    fi
+
+    echo -n "$tag"
+}
+
+##
+## -----
+##
+## version:set
+##
+## Set and save version to meta file.
+## First time will create file if not present.
+##
+## Arguments:
+## @arg 1 {string} [tag=0.0.1]
+function version:set {
+
+    local tag
+    tag=${1}
+    if [ -z "$tag" ]; then
+        exit 1
+    fi
+
+    version:check
+
+    echo -e "$tag" > "${VERSION_FILE}"
+}
+
+##
+## -----
+##
+## version:bump
+## Bump sem ver by specifying a level.
+## Valid levels are:
+## - patch (default)
+## - minor
+## - major
+##
+## @see https://github.com/fsaintjacques/semver-tool/blob/master/src/semver
+##
+## @arg 1 {string} [level=patch]
+## Outputs:
+##   Semver string "$major.$minor.$patch"
+function version:bump {
+
+    version:check
+
+    # Read contents of version and store in
+    IFS='.' read -ra identifiers < "$VERSION_FILE"
+
+    [[ "${#identifiers[@]}" -ne 3 ]] && echo "Invalid semver string" && return 1
+
+    #If we don't provide a second argument make patch increment
+    [[ "$#" -eq 0 ]] && level='patch' || level=$1
+
+    patch=${identifiers[2]}
+    minor=${identifiers[1]}
+    major=${identifiers[0]}
+
+    case $level in
+        patch)
+            patch=$((patch+1))
+        ;;
+        minor)
+            minor=$((minor+1))
+            patch=0
+        ;;
+        major)
+            major=$((major+1))
+            minor=0
+            patch=0
+        ;;
+        *)
+            echo "Invalid level passed"
+            return 2
+    esac
+
+    echo "$major.$minor.$patch"
+}
+
+function version:check {
+    if [ ! -f "$VERSION_FILE" ]; then
+        echo "0.0.0" > "$VERSION_FILE"
+    fi
+}
+
+##########################################
+# Help and auxiliary functions
+##########################################
+
+## Show function code
+function help:show {
+    declare -f "$1"
+}
+
+function help {
+    echo ""
+    echo "$0 <task> [...arguments]"
+    echo ""
+    echo "Project: ${PROJECT}"
+    echo ""
+    echo "Tasks:"
+    compgen -A function | grep -v '^_' | cat -n
+    echo ""
+
+    prog="$0"
+    me=$(basename "$prog")
+    
+    grep -e '^##[[:space:]]' -e '^##$' "$prog" | sed -e 's/^##//' -e "s/_PROG_/$me/" 2>&1 | less
+}
+
+TIMEFORMAT="Task completed in %3lR"
+time "${@:-help}"
