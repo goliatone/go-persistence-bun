@@ -134,7 +134,7 @@ func (c Client) Migrate(ctx context.Context) error {
 	return c.migrations.Migrate(ctx, c.db)
 }
 
-// RegisterFixtures adds SQL based migrations
+// RegisterFixtures adds file based fixtures
 func (c Client) RegisterFixtures(migrations ...fs.FS) *Fixtures {
 	for _, f := range migrations {
 		c.fixtures.AddOptions(WithFS(f))
