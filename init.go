@@ -38,9 +38,6 @@ type Config interface {
 	GetServer() string
 	GetDatabase() string
 	GetPingTimeout() time.Duration
-	// }
-
-	// type OpenTelemetryConfig interface {
 	GetOtelIdentifier() string
 }
 
@@ -109,7 +106,7 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 
 	client.db = bunDB
 
-	client.fixtures = NewSeeManager(bunDB)
+	client.fixtures = NewSeedManager(bunDB)
 
 	return &client, client.Check()
 }
