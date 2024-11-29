@@ -39,6 +39,16 @@ function _install:lgr {
     fi
 }
 
+function _install:changelog {
+    if git-cliff lgr 2>/dev/null; then
+        lgr OK "git-cliff already installed..."
+    else
+        echo "Installing lgr"
+        brew install brew install orhun/git-cliff/git-cliff
+        lgr OK "git-cliff installed..."
+    fi
+}
+
 function _install:brew {
     if [[ $(command -v brew) == "" ]]; then
         lgr I "Installing Hombrew"
@@ -70,6 +80,7 @@ function dev:install {
     _install:brew
 
     _install:envset
+    _install:changelog
 
     lgr ok "dependencies intalled..."
 }
@@ -77,7 +88,6 @@ function dev:install {
 function dev:env:load {
     eval "$(envset development --isolated=true)"
 }
-
 
 ##
 ## ########################################
@@ -159,22 +169,46 @@ function version:set {
 ## - minor
 ## - major
 ##
+## If you want to update the .version file
+## pass the `--write` flag.
 ## @see https://github.com/fsaintjacques/semver-tool/blob/master/src/semver
 ##
 ## @arg 1 {string} [level=patch]
 ## Outputs:
 ##   Semver string "$major.$minor.$patch"
+##
+## @flag --write Will write to .version file
+##
 function version:bump {
 
     version:check
+
+    # Default values
+    level='patch'
+    write_to_file=0
+
+    # Parse options
+    while [[ "$#" -gt 0 ]]; do
+        case $1 in
+            --write)
+                write_to_file=1
+                shift
+            ;;
+            patch|minor|major)
+                level=$1
+                shift
+            ;;
+            *)
+                echo "Invalid option: $1"
+                return 2
+            ;;
+        esac
+    done
 
     # Read contents of version and store in
     IFS='.' read -ra identifiers < "$VERSION_FILE"
 
     [[ "${#identifiers[@]}" -ne 3 ]] && echo "Invalid semver string" && return 1
-
-    #If we don't provide a second argument make patch increment
-    [[ "$#" -eq 0 ]] && level='patch' || level=$1
 
     patch=${identifiers[2]}
     minor=${identifiers[1]}
@@ -198,13 +232,74 @@ function version:bump {
             return 2
     esac
 
-    echo "$major.$minor.$patch"
+    new_version="$major.$minor.$patch"
+
+    if [[ $write_to_file -eq 1 ]]; then
+        echo "$new_version" > "${VERSION_FILE}"
+    else
+        echo "$new_version"
+    fi
 }
 
 function version:check {
     if [ ! -f "$VERSION_FILE" ]; then
         echo "0.0.0" > "$VERSION_FILE"
     fi
+}
+
+
+##
+## -----
+##
+## release
+##
+## Bump our current version, create a git tag
+## and push to trigger our release flow.
+##
+## Arguments:
+## @arg 1 {string} [level=patch]
+##        Accepted major, minor, patch
+function release {
+    local tag
+    local level
+    local message
+
+    # Fetch all changes from origin
+    git fetch --all
+    # Make sure we have the latest version file
+    git checkout origin/main -- ".version"
+
+    # Pull tags to make sure we have
+    git pull --tags -f
+
+    level=${1:-"patch"}
+
+    # Bump our version
+    tag=$(version:bump "${level}")
+
+    # Set message: default to New major|minor|patch release: vx.x.x
+    message=${2:-"New ${level} release: v${tag}"}
+
+    # Update version file
+    version:set "${tag}"
+
+    # Add updated version file to git
+    git add "${VERSION_FILE}"
+    git commit -m "Bump version: v${tag}"
+
+    # Create a new tag
+    git tag -a "v${tag}" -m "${message}"
+
+    # Push tags and trigger release 🚀 🥳
+    git push --tags
+    git push
+
+    # Generate changelog
+    git cliff --output CHANGELOG.md
+    git add CHANGELOG.md
+    git commit -m "docs: update changelog for v${tag}"
+
+    git push
 }
 
 ##########################################
@@ -228,7 +323,7 @@ function help {
 
     prog="$0"
     me=$(basename "$prog")
-    
+
     grep -e '^##[[:space:]]' -e '^##$' "$prog" | sed -e 's/^##//' -e "s/_PROG_/$me/" 2>&1 | less
 }
 
