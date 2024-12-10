@@ -3,10 +3,15 @@ package persistence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"reflect"
+	"strconv"
 	"strings"
+	"text/template"
 
+	"github.com/goliatone/hashid/pkg/hashid"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dbfixture"
 )
@@ -17,7 +22,7 @@ type Fixtures struct {
 	db         *bun.DB
 	truncate   bool
 	drop       bool
-	funcMap    TplMap
+	funcMap    template.FuncMap
 	fixture    *dbfixture.Fixture
 	opts       []FixtureOption
 	FileFilter func(path, name string) bool
@@ -47,11 +52,8 @@ func WithDropTables() FixtureOption {
 	}
 }
 
-// TplMap hosts function maps
-type TplMap map[string]any
-
 // WithTemplateFuncs are used to solve functions in seed file
-func WithTemplateFuncs(funcMap TplMap) FixtureOption {
+func WithTemplateFuncs(funcMap template.FuncMap) FixtureOption {
 	return func(s *Fixtures) {
 		for k, v := range funcMap {
 			s.funcMap[k] = v
@@ -74,7 +76,7 @@ func NewSeedManager(db *bun.DB, opts ...FixtureOption) *Fixtures {
 	s := &Fixtures{
 		db:      db,
 		opts:    opts,
-		funcMap: make(TplMap),
+		funcMap: defaultFuncs(),
 		FileFilter: func(path, name string) bool {
 			return strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
 		},
@@ -94,6 +96,8 @@ func (s *Fixtures) init() {
 	} else if s.truncate {
 		opts = append(opts, dbfixture.WithTruncateTables())
 	}
+
+	opts = append(opts, dbfixture.WithTemplateFuncs(s.funcMap))
 
 	// Recreate will drop existing table
 	s.fixture = dbfixture.New(s.db, opts...)
@@ -157,4 +161,33 @@ func (s *Fixtures) LoadFile(ctx context.Context, file string) error {
 	}
 
 	return os.ErrNotExist
+}
+
+func defaultFuncs() template.FuncMap {
+	return template.FuncMap{
+		"hashid": func(identifier reflect.Value) (string, error) {
+			str := toString(identifier)
+			out, err := hashid.New(str)
+			if err != nil {
+				return "", err
+			}
+			return out, nil
+		},
+	}
+}
+
+func toString(v reflect.Value) string {
+	switch v.Kind() {
+	case reflect.Bool:
+		return strconv.FormatBool(v.Bool())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(v.Int(), 10)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(v.Uint(), 10)
+	case reflect.Float32:
+		return strconv.FormatFloat(v.Float(), 'g', -1, 32)
+	case reflect.Float64:
+		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
+	}
+	return fmt.Sprintf("%v", v.Interface())
 }

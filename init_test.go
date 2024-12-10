@@ -56,6 +56,7 @@ func TestNew(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
+	defer resetInit()
 
 	// Setup mock expectations
 	mock.ExpectPing()
@@ -77,11 +78,18 @@ func TestNew(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func resetInit() {
+	bunDB = nil
+	modelsToRegister = []any{}
+}
+
 func TestRegisterModel(t *testing.T) {
 	type TestModel struct {
 		ID   int64 `bun:"id,pk,autoincrement"`
 		Name string
 	}
+
+	defer resetInit()
 
 	RegisterModel((*TestModel)(nil))
 
@@ -89,6 +97,8 @@ func TestRegisterModel(t *testing.T) {
 }
 
 func TestFixtures(t *testing.T) {
+	defer resetInit()
+
 	mockDB := bun.NewDB(new(sql.DB), pgdialect.New())
 	fixtures := NewSeedManager(mockDB)
 
@@ -123,6 +133,8 @@ func TestFixtures(t *testing.T) {
 }
 
 func TestMigrations(t *testing.T) {
+	defer resetInit()
+
 	ctx := context.Background()
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
@@ -165,6 +177,8 @@ func TestMigrations(t *testing.T) {
 }
 
 func TestClient(t *testing.T) {
+	defer resetInit()
+
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	assert.NoError(t, err)
 	defer db.Close()

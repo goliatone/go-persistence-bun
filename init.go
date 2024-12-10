@@ -50,7 +50,10 @@ type Client struct {
 	sqlDB      *sql.DB
 	migrations *Migrations
 	fixtures   *Fixtures
+	logf       func(format string, a ...any)
 }
+
+func nolog(format string, a ...any) {}
 
 // RegisterModel registers a model in Bun or,
 // if the global instance is not yet initialized,
@@ -77,6 +80,7 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	client := Client{
 		config:     cfg,
 		migrations: &Migrations{},
+		logf:       nolog,
 	}
 
 	// Create a Bun db on top of it.
@@ -109,6 +113,17 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	client.fixtures = NewSeedManager(bunDB)
 
 	return &client, client.Check()
+}
+
+func (c *Client) SetLogger(l func(format string, a ...any)) {
+	c.logf = l
+	if c.migrations != nil {
+		c.migrations.logf = c.logf
+	}
+}
+
+func (c Client) Log(format string, a ...any) {
+	c.logf(format, a...)
 }
 
 // Seed will run seeds

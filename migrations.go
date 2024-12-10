@@ -31,6 +31,7 @@ type Migrations struct {
 	Files      []fs.FS
 	Func       []MigratorFunc
 	migrations *migrate.MigrationGroup
+	logf       func(format string, a ...any)
 }
 
 func (m *Migrations) initMigrations() (*migrate.Migrations, error) {
@@ -48,6 +49,12 @@ func (m *Migrations) initMigrations() (*migrate.Migrations, error) {
 		}
 	}
 	return migrations, nil
+}
+
+func (m *Migrations) log(format string, a ...any) {
+	if m.logf != nil {
+		m.logf(format, a...)
+	}
 }
 
 // RegisterSQLMigrations adds SQL based migrations
@@ -75,12 +82,15 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 		return fmt.Errorf("error init migrations: %w", err)
 	}
 
+	m.log("migrations: found files: %s\n", migrations.Sorted().String())
+
 	migrator := migrate.NewMigrator(db, migrations)
 	if err := migrator.Init(ctx); err != nil {
 		return fmt.Errorf("error create migrator: %w", err)
 	}
 
 	if len(m.Files) == len(m.Func) && len(m.Func) == 0 {
+		m.log("migrations: we did not find any migrations")
 		return nil
 	}
 
