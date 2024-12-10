@@ -6,6 +6,7 @@ toolchain go1.23.3
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/goliatone/hashid v0.0.6
 	github.com/stretchr/testify v1.9.0
 	github.com/uptrace/bun v1.2.6
 	github.com/uptrace/bun/dbfixture v1.2.6
@@ -37,5 +38,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.32.0 // indirect
 	go.opentelemetry.io/otel/trace v1.32.0 // indirect
 	golang.org/x/sys v0.27.0 // indirect
+	golang.org/x/text v0.19.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
