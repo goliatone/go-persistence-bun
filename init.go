@@ -72,7 +72,7 @@ func RegisterModel(model ...any) {
 	modelsToRegister = append(modelsToRegister, model...)
 }
 
-func RegisterM2MModel(model ...any) {
+func RegisterMany2ManyModel(model ...any) {
 	bunMtx.Lock()
 	defer bunMtx.Unlock()
 	// TODO: Should we panic if we do this after New?
