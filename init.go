@@ -17,9 +17,10 @@ import (
 )
 
 var (
-	bunDB            *bun.DB
-	bunMtx           sync.Mutex
-	modelsToRegister []any
+	bunDB               *bun.DB
+	bunMtx              sync.Mutex
+	modelsToRegister    []any
+	m2mModelsToRegister []any
 )
 
 // DefaultDriver is the Postgres driver
@@ -67,11 +68,15 @@ func RegisterModel(model ...any) {
 	bunMtx.Lock()
 	defer bunMtx.Unlock()
 
-	if bunDB != nil {
-		bunDB.RegisterModel(model...)
-	} else {
-		modelsToRegister = append(modelsToRegister, model...)
-	}
+	// TODO: Should we panic if we do this after New?
+	modelsToRegister = append(modelsToRegister, model...)
+}
+
+func RegisterM2MModel(model ...any) {
+	bunMtx.Lock()
+	defer bunMtx.Unlock()
+	// TODO: Should we panic if we do this after New?
+	m2mModelsToRegister = append(m2mModelsToRegister, model...)
 }
 
 // New creates a new client
@@ -103,6 +108,9 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 			),
 		)
 	}
+
+	// NOTE: m2m models should be registered first!
+	bunDB.RegisterModel(m2mModelsToRegister...)
 
 	bunDB.RegisterModel(modelsToRegister...)
 
