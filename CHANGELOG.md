@@ -1,5 +1,20 @@
 # Changelog
 
+# [0.0.3](https://github.com/goliatone/go-persistence-bun/compare/v0.0.2...v0.0.3) - (2024-12-26)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.0.3 ([d7b29a6](https://github.com/goliatone/go-persistence-bun/commit/d7b29a66c6f1068b0c8c47dcba0d8b43313e000b))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Register M2MModel ([1d89938](https://github.com/goliatone/go-persistence-bun/commit/1d899380222e83debbe3ff911f23548fb2e5a7d4))  - (goliatone)
+- Register M2MModel ([798565a](https://github.com/goliatone/go-persistence-bun/commit/798565ac1f034e6079333a5c956b0aed8e8d04ef))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.0.2 ([2703c70](https://github.com/goliatone/go-persistence-bun/commit/2703c709898fbe9c65bf54c0545ca0b59f387a62))  - (goliatone)
+
 # [0.0.2](https://github.com/goliatone/go-persistence-bun/compare/v0.0.1...v0.0.2) - (2024-12-10)
 
 ## <!-- 1 -->🐛 Bug Fixes
