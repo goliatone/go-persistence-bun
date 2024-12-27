@@ -123,6 +123,10 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	return &client, client.Check()
 }
 
+// func (c *Client) DB() *bun.DB {
+// 	return bunDB
+// }
+
 func (c *Client) SetLogger(l func(format string, a ...any)) {
 	c.logf = l
 	if c.migrations != nil {
@@ -192,7 +196,7 @@ func (c Client) Report() *migrate.MigrationGroup {
 }
 
 // DB returns a database
-func (c Client) DB() bun.IDB {
+func (c Client) DB() *bun.DB {
 	return c.db
 }
 
