@@ -37,21 +37,23 @@ type Config interface {
 	GetDebug() bool
 	GetDriver() string
 	GetServer() string
-	GetDatabase() string
 	GetPingTimeout() time.Duration
 	GetOtelIdentifier() string
+	// GetDatabase() string
 }
 
 // Client is the persistence client
 type Client struct {
-	config     Config
-	context    context.Context
-	cancel     context.CancelFunc
-	db         *bun.DB
-	sqlDB      *sql.DB
-	migrations *Migrations
-	fixtures   *Fixtures
-	logf       func(format string, a ...any)
+	config            Config
+	context           context.Context
+	cancel            context.CancelFunc
+	db                *bun.DB
+	sqlDB             *sql.DB
+	migrations        *Migrations
+	fixtures          *Fixtures
+	migrationsEnabled bool
+	seedsEnabled      bool
+	logf              func(format string, a ...any)
 }
 
 func nolog(format string, a ...any) {}
@@ -80,12 +82,28 @@ func RegisterMany2ManyModel(model ...any) {
 }
 
 // New creates a new client
+// Optionally if Config has defined these methods they will configure the
+// related functionality:
+// - GetSeedsEnabled
+// - GetMigrationsEnabled
 func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	//var err error
 	client := Client{
-		config:     cfg,
-		migrations: &Migrations{},
-		logf:       nolog,
+		config:            cfg,
+		migrations:        &Migrations{},
+		logf:              nolog,
+		seedsEnabled:      true,
+		migrationsEnabled: true,
+	}
+
+	// our config can optionally configure migrations enablement
+	if cmgr, ok := cfg.(interface{ GetMigrationsEnabled() bool }); ok {
+		client.migrationsEnabled = cmgr.GetMigrationsEnabled()
+	}
+
+	// our config can optionally configure seed enablement
+	if smgr, ok := cfg.(interface{ GetSeedsEnabled() bool }); ok {
+		client.seedsEnabled = smgr.GetSeedsEnabled()
 	}
 
 	// Create a Bun db on top of it.
@@ -140,6 +158,10 @@ func (c Client) Log(format string, a ...any) {
 
 // Seed will run seeds
 func (c Client) Seed(ctx context.Context) error {
+	if !c.seedsEnabled {
+		c.Log("[WARN] persistence seed is disabled")
+		return nil
+	}
 	return c.fixtures.Load(ctx)
 }
 
@@ -155,6 +177,11 @@ func (c Client) GetMigrations() *Migrations {
 
 // Migrate will migrate db
 func (c Client) Migrate(ctx context.Context) error {
+	if !c.migrationsEnabled {
+		c.Log("[WARN] persistence migrations are disabled")
+		return nil
+	}
+
 	return c.migrations.Migrate(ctx, c.db)
 }
 
@@ -184,7 +211,7 @@ func (c Client) Rollback(ctx context.Context, opts ...migrate.MigrationOption) e
 }
 
 // RollbackAll rollbacks every registered migration group.
-func (c Client) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
+func (c Client) RollbackAll(ctx context.Context, opts ...migrate.MigrationOption) error {
 	return c.migrations.RollbackAll(ctx, c.db, opts...)
 }
 
