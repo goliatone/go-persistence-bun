@@ -34,6 +34,8 @@ type Migrations struct {
 	logf       func(format string, a ...any)
 }
 
+// TODO: We need to make sure we run migrations in the reverse order that
+// were up.run
 func (m *Migrations) initMigrations() (*migrate.Migrations, error) {
 	migrations := migrate.NewMigrations()
 
