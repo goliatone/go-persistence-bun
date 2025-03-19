@@ -34,8 +34,12 @@ type Migrations struct {
 	logf       func(format string, a ...any)
 }
 
-// TODO: We need to make sure we run migrations in the reverse order that
+// TODO: We need to make sure we run down migrations in the reverse order that
 // were up.run
+
+// TODO: We should support ordering of migrations outside of the naming convention
+// for the scneario of importing migrations from a different project that might need
+// to be run before others but have a naming that would put them after
 func (m *Migrations) initMigrations() (*migrate.Migrations, error) {
 	migrations := migrate.NewMigrations()
 
