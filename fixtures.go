@@ -26,6 +26,7 @@ type Fixtures struct {
 	fixture    *dbfixture.Fixture
 	opts       []FixtureOption
 	FileFilter func(path, name string) bool
+	lgr        Logger
 }
 
 // FixtureOption configures the seed manager
@@ -77,6 +78,7 @@ func NewSeedManager(db *bun.DB, opts ...FixtureOption) *Fixtures {
 		db:      db,
 		opts:    opts,
 		funcMap: defaultFuncs(),
+		lgr:     &defaultLogger{},
 		FileFilter: func(path, name string) bool {
 			return strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
 		},
@@ -92,8 +94,10 @@ func (s *Fixtures) init() {
 
 	opts := []dbfixture.FixtureOption{}
 	if s.drop {
+		s.lgr.Debug("dropping tables...")
 		opts = append(opts, dbfixture.WithRecreateTables())
 	} else if s.truncate {
+		s.lgr.Debug("truncating tables...")
 		opts = append(opts, dbfixture.WithTruncateTables())
 	}
 
@@ -158,6 +162,7 @@ func (s *Fixtures) LoadFile(ctx context.Context, file string) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		s.lgr.Debug("loading fixture file", "file", file)
 	}
 
 	return os.ErrNotExist
