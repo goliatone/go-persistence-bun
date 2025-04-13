@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"io/fs"
-	"log"
 	"sync"
 	"time"
 
@@ -53,10 +52,8 @@ type Client struct {
 	fixtures          *Fixtures
 	migrationsEnabled bool
 	seedsEnabled      bool
-	logf              func(format string, a ...any)
+	lgr               Logger
 }
-
-func nolog(format string, a ...any) {}
 
 // RegisterModel registers a model in Bun or,
 // if the global instance is not yet initialized,
@@ -90,8 +87,8 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	//var err error
 	client := Client{
 		config:            cfg,
-		migrations:        &Migrations{},
-		logf:              nolog,
+		migrations:        NewMigrations(),
+		lgr:               &defaultLogger{},
 		seedsEnabled:      true,
 		migrationsEnabled: true,
 	}
@@ -141,25 +138,17 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	return &client, client.Check()
 }
 
-// func (c *Client) DB() *bun.DB {
-// 	return bunDB
-// }
-
-func (c *Client) SetLogger(l func(format string, a ...any)) {
-	c.logf = l
+func (c *Client) SetLogger(logger Logger) {
+	c.lgr = logger
 	if c.migrations != nil {
-		c.migrations.logf = c.logf
+		c.migrations.SetLogger(logger)
 	}
-}
-
-func (c Client) Log(format string, a ...any) {
-	c.logf(format, a...)
 }
 
 // Seed will run seeds
 func (c Client) Seed(ctx context.Context) error {
 	if !c.seedsEnabled {
-		c.Log("[WARN] persistence seed is disabled")
+		c.lgr.Warn("persistence seed is disabled")
 		return nil
 	}
 	return c.fixtures.Load(ctx)
@@ -178,7 +167,7 @@ func (c Client) GetMigrations() *Migrations {
 // Migrate will migrate db
 func (c Client) Migrate(ctx context.Context) error {
 	if !c.migrationsEnabled {
-		c.Log("[WARN] persistence migrations are disabled")
+		c.lgr.Warn("[WARN] persistence migrations are disabled")
 		return nil
 	}
 
@@ -238,7 +227,7 @@ func (c Client) Check() error {
 // MustConnect will panic if no connection
 func (c Client) MustConnect() {
 	if err := c.Check(); err != nil {
-		log.Fatalf("persistence client connect: %s", err)
+		c.lgr.Fatal("persistence client connect", err)
 	}
 	// defer c.db.Close()
 }
@@ -252,7 +241,7 @@ func (c Client) Close() error {
 
 // Start will start the service
 func (c *Client) Start(ctx context.Context) error {
-	log.Printf("Initializing database withtimeout %d...\n", c.config.GetPingTimeout())
+	c.lgr.Info("Initializing database", "timeout", c.config.GetPingTimeout())
 
 	ctx, cancel := context.WithTimeout(ctx, c.config.GetPingTimeout())
 	c.cancel = cancel
@@ -262,7 +251,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 // Stop will stop the service
 func (c *Client) Stop(ctx context.Context) error {
-	log.Println("Stopping database...")
+	c.lgr.Debug("Stopping database...")
 	if c.cancel != nil {
 		c.cancel()
 	}
