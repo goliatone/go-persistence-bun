@@ -31,7 +31,21 @@ type Migrations struct {
 	Files      []fs.FS
 	Func       []MigratorFunc
 	migrations *migrate.MigrationGroup
-	logf       func(format string, a ...any)
+	lgr        Logger
+}
+
+func NewMigrations() *Migrations {
+	m := &Migrations{
+		Files: make([]fs.FS, 0),
+		Func:  make([]MigratorFunc, 0),
+		lgr:   &defaultLogger{},
+	}
+
+	return m
+}
+
+func (m *Migrations) SetLogger(logger Logger) {
+	m.lgr = logger
 }
 
 // TODO: We need to make sure we run down migrations in the reverse order that
@@ -55,12 +69,6 @@ func (m *Migrations) initMigrations() (*migrate.Migrations, error) {
 		}
 	}
 	return migrations, nil
-}
-
-func (m *Migrations) log(format string, a ...any) {
-	if m.logf != nil {
-		m.logf(format, a...)
-	}
 }
 
 // RegisterSQLMigrations adds SQL based migrations
@@ -88,7 +96,7 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 		return fmt.Errorf("error init migrations: %w", err)
 	}
 
-	m.log("migrations: found files: %s\n", migrations.Sorted().String())
+	m.lgr.Debug("migrations: found files", "migrations", migrations.Sorted().String())
 
 	migrator := migrate.NewMigrator(db, migrations)
 	if err := migrator.Init(ctx); err != nil {
@@ -96,7 +104,7 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 	}
 
 	if len(m.Files) == len(m.Func) && len(m.Func) == 0 {
-		m.log("migrations: we did not find any migrations")
+		m.lgr.Debug("migrations: we did not find any migrations")
 		return nil
 	}
 
