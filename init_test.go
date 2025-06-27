@@ -53,7 +53,7 @@ func (m *MockConfig) GetOtelIdentifier() string {
 
 func TestNew(t *testing.T) {
 	// Create a mock DB with driver
-	db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	assert.NoError(t, err)
 	defer db.Close()
 	defer resetInit()
@@ -136,7 +136,7 @@ func TestMigrations(t *testing.T) {
 	defer resetInit()
 
 	ctx := context.Background()
-	db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -151,13 +151,13 @@ func TestMigrations(t *testing.T) {
 	mockDB := bun.NewDB(db, pgdialect.New())
 
 	t.Run("Migrate Empty", func(t *testing.T) {
-		emptyMigrations := &Migrations{}
+		emptyMigrations := NewMigrations()
 		err := emptyMigrations.Migrate(ctx, mockDB)
 		assert.NoError(t, err)
 	})
 
 	t.Run("Register Migrations", func(t *testing.T) {
-		migrations := &Migrations{}
+		migrations := NewMigrations()
 
 		fsys := fstest.MapFS{
 			"001_init.up.sql": &fstest.MapFile{Data: []byte("CREATE TABLE test (id INT);")},

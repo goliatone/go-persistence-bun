@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"io/fs"
-	"log"
 	"sync"
 	"time"
 
@@ -37,24 +36,24 @@ type Config interface {
 	GetDebug() bool
 	GetDriver() string
 	GetServer() string
-	GetDatabase() string
 	GetPingTimeout() time.Duration
 	GetOtelIdentifier() string
+	// GetDatabase() string
 }
 
 // Client is the persistence client
 type Client struct {
-	config     Config
-	context    context.Context
-	cancel     context.CancelFunc
-	db         *bun.DB
-	sqlDB      *sql.DB
-	migrations *Migrations
-	fixtures   *Fixtures
-	logf       func(format string, a ...any)
+	config            Config
+	context           context.Context
+	cancel            context.CancelFunc
+	db                *bun.DB
+	sqlDB             *sql.DB
+	migrations        *Migrations
+	fixtures          *Fixtures
+	migrationsEnabled bool
+	seedsEnabled      bool
+	lgr               Logger
 }
-
-func nolog(format string, a ...any) {}
 
 // RegisterModel registers a model in Bun or,
 // if the global instance is not yet initialized,
@@ -80,12 +79,28 @@ func RegisterMany2ManyModel(model ...any) {
 }
 
 // New creates a new client
+// Optionally if Config has defined these methods they will configure the
+// related functionality:
+// - GetSeedsEnabled
+// - GetMigrationsEnabled
 func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	//var err error
 	client := Client{
-		config:     cfg,
-		migrations: &Migrations{},
-		logf:       nolog,
+		config:            cfg,
+		migrations:        NewMigrations(),
+		lgr:               &defaultLogger{},
+		seedsEnabled:      true,
+		migrationsEnabled: true,
+	}
+
+	// our config can optionally configure migrations enablement
+	if cmgr, ok := cfg.(interface{ GetMigrationsEnabled() bool }); ok {
+		client.migrationsEnabled = cmgr.GetMigrationsEnabled()
+	}
+
+	// our config can optionally configure seed enablement
+	if smgr, ok := cfg.(interface{ GetSeedsEnabled() bool }); ok {
+		client.seedsEnabled = smgr.GetSeedsEnabled()
 	}
 
 	// Create a Bun db on top of it.
@@ -123,19 +138,19 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	return &client, client.Check()
 }
 
-func (c *Client) SetLogger(l func(format string, a ...any)) {
-	c.logf = l
+func (c *Client) SetLogger(logger Logger) {
+	c.lgr = logger
 	if c.migrations != nil {
-		c.migrations.logf = c.logf
+		c.migrations.SetLogger(logger)
 	}
-}
-
-func (c Client) Log(format string, a ...any) {
-	c.logf(format, a...)
 }
 
 // Seed will run seeds
 func (c Client) Seed(ctx context.Context) error {
+	if !c.seedsEnabled {
+		c.lgr.Warn("persistence seed is disabled")
+		return nil
+	}
 	return c.fixtures.Load(ctx)
 }
 
@@ -151,6 +166,11 @@ func (c Client) GetMigrations() *Migrations {
 
 // Migrate will migrate db
 func (c Client) Migrate(ctx context.Context) error {
+	if !c.migrationsEnabled {
+		c.lgr.Warn("[WARN] persistence migrations are disabled")
+		return nil
+	}
+
 	return c.migrations.Migrate(ctx, c.db)
 }
 
@@ -180,7 +200,7 @@ func (c Client) Rollback(ctx context.Context, opts ...migrate.MigrationOption) e
 }
 
 // RollbackAll rollbacks every registered migration group.
-func (c Client) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
+func (c Client) RollbackAll(ctx context.Context, opts ...migrate.MigrationOption) error {
 	return c.migrations.RollbackAll(ctx, c.db, opts...)
 }
 
@@ -192,7 +212,7 @@ func (c Client) Report() *migrate.MigrationGroup {
 }
 
 // DB returns a database
-func (c Client) DB() bun.IDB {
+func (c Client) DB() *bun.DB {
 	return c.db
 }
 
@@ -207,7 +227,7 @@ func (c Client) Check() error {
 // MustConnect will panic if no connection
 func (c Client) MustConnect() {
 	if err := c.Check(); err != nil {
-		log.Fatalf("persistence client connect: %s", err)
+		c.lgr.Fatal("persistence client connect", err)
 	}
 	// defer c.db.Close()
 }
@@ -221,7 +241,7 @@ func (c Client) Close() error {
 
 // Start will start the service
 func (c *Client) Start(ctx context.Context) error {
-	log.Printf("Initializing database withtimeout %d...\n", c.config.GetPingTimeout())
+	c.lgr.Info("Initializing database", "timeout", c.config.GetPingTimeout())
 
 	ctx, cancel := context.WithTimeout(ctx, c.config.GetPingTimeout())
 	c.cancel = cancel
@@ -231,7 +251,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 // Stop will stop the service
 func (c *Client) Stop(ctx context.Context) error {
-	log.Println("Stopping database...")
+	c.lgr.Debug("Stopping database...")
 	if c.cancel != nil {
 		c.cancel()
 	}
