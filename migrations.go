@@ -45,7 +45,16 @@ func NewMigrations() *Migrations {
 }
 
 func (m *Migrations) SetLogger(logger Logger) {
-	m.lgr = logger
+	if logger != nil {
+		m.lgr = logger
+	}
+}
+
+func (m *Migrations) logger() Logger {
+	if m.lgr == nil {
+		return &defaultLogger{}
+	}
+	return m.lgr
 }
 
 // TODO: We need to make sure we run down migrations in the reverse order that
@@ -96,7 +105,7 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 		return fmt.Errorf("error init migrations: %w", err)
 	}
 
-	m.lgr.Debug("migrations: found files", "migrations", migrations.Sorted().String())
+	m.logger().Debug("migrations: found files", "migrations", migrations.Sorted().String())
 
 	migrator := migrate.NewMigrator(db, migrations)
 	if err := migrator.Init(ctx); err != nil {
@@ -104,7 +113,7 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 	}
 
 	if len(m.Files) == len(m.Func) && len(m.Func) == 0 {
-		m.lgr.Debug("migrations: we did not find any migrations")
+		m.logger().Debug("migrations: we did not find any migrations")
 		return nil
 	}
 
