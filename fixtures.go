@@ -2,7 +2,6 @@ package persistence
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 
+	apierrors "github.com/goliatone/go-errors"
 	"github.com/goliatone/hashid/pkg/hashid"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dbfixture"
@@ -113,25 +113,34 @@ func (s *Fixtures) AddOptions(opts ...FixtureOption) *Fixtures {
 	return s
 }
 
-// Load will load a file
+// Load will load all fixtures from all configured directories.
+// It returns a rich error if any part of the process fails.
 func (s *Fixtures) Load(ctx context.Context) error {
-
 	if s.fixture == nil {
 		s.init()
 	}
 
-	var err error
+	var allErrors []error
 	for _, dir := range s.dirs {
-		err = errors.Join(s.load(ctx, dir))
+		if err := s.load(ctx, dir); err != nil {
+			allErrors = append(allErrors, err)
+		}
 	}
 
-	return err
+	if len(allErrors) > 0 {
+		joinedErr := apierrors.Join(allErrors...)
+		return apierrors.Wrap(joinedErr, apierrors.CategoryOperation, "one or more errors occurred during fixture loading")
+	}
+
+	return nil
 }
 
+// load walks a single directory and loads all valid fixture files within it.
+// This is the internal method where the logical bug was fixed.
 func (s *Fixtures) load(ctx context.Context, dir fs.FS) error {
 	return fs.WalkDir(dir, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return apierrors.Wrap(err, apierrors.CategoryInternal, "error walking directory").WithMetadata(map[string]any{"path": path})
 		}
 
 		if d.IsDir() {
@@ -139,33 +148,53 @@ func (s *Fixtures) load(ctx context.Context, dir fs.FS) error {
 		}
 
 		if !s.FileFilter(path, d.Name()) {
+			s.lgr.Debug("skipping file due to filter", "path", path)
 			return nil
 		}
 
-		if err := s.LoadFile(ctx, path); err != nil {
-			return err
+		s.lgr.Debug("loading fixture file", "file", path)
+		if loadErr := s.fixture.Load(ctx, dir, path); loadErr != nil {
+			return apierrors.Wrap(loadErr, apierrors.CategoryOperation, "failed to load fixture data").
+				WithMetadata(map[string]any{"file": path})
 		}
 
 		return nil
 	})
 }
 
-// LoadFile will load a file
+// LoadFile will search for and load a single file across all configured directories.
 func (s *Fixtures) LoadFile(ctx context.Context, file string) error {
-	var err error
+	if s.fixture == nil {
+		s.init()
+	}
+
+	if len(s.dirs) == 0 {
+		return apierrors.Wrap(fs.ErrNotExist, apierrors.CategoryBadInput, "no filesystems configured to search for file").
+			WithMetadata(map[string]any{"file": file})
+	}
+
+	var lastErr error
 	for _, dir := range s.dirs {
-		err = s.fixture.Load(ctx, dir, file)
+		err := s.fixture.Load(ctx, dir, file)
 		if err == nil {
+			s.lgr.Debug("loading fixture file", "file", file)
 			return nil
 		}
 
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
+		if !apierrors.Is(err, os.ErrNotExist) {
+			return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to load fixture file").
+				WithMetadata(map[string]any{
+					"file": file,
+				})
 		}
-		s.lgr.Debug("loading fixture file", "file", file)
+
+		lastErr = err
 	}
 
-	return os.ErrNotExist
+	return apierrors.Wrap(lastErr, apierrors.CategoryNotFound, "fixture file not found in any configured directory").
+		WithMetadata(map[string]any{
+			"file": file,
+		})
 }
 
 func defaultFuncs() template.FuncMap {
@@ -174,7 +203,7 @@ func defaultFuncs() template.FuncMap {
 			str := toString(identifier)
 			out, err := hashid.New(str)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("failed to generate hashid for value '%s': %w", str, err)
 			}
 			return out, nil
 		},
