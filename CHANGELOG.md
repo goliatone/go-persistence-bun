@@ -1,5 +1,32 @@
 # Changelog
 
+# [0.2.0](https://github.com/goliatone/go-persistence-bun/compare/v0.1.0...v0.2.0) - (2025-06-29)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Remove for now go func migrations ([d36f294](https://github.com/goliatone/go-persistence-bun/commit/d36f2942aab588d39af26bd6207a9dab6651df2d))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.2.0 ([71881b1](https://github.com/goliatone/go-persistence-bun/commit/71881b17b15dfcdb9c39c8d93144baff160665cc))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Better error handling and messages ([e2a9c6e](https://github.com/goliatone/go-persistence-bun/commit/e2a9c6e7031d6288ad6b1d41846a3afde91d18b6))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.1.0 ([7053e9e](https://github.com/goliatone/go-persistence-bun/commit/7053e9e335f852dc7e81f2760fcf7ccab11339f4))  - (goliatone)
+
+## <!-- 30 -->📝 Other
+
+- PR [#3](https://github.com/goliatone/go-persistence-bun/pull/3): go func migrations ([d69ee40](https://github.com/goliatone/go-persistence-bun/commit/d69ee4011bbaa8d3f0262868b4a414a123db44ac))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update readme ([76f35bb](https://github.com/goliatone/go-persistence-bun/commit/76f35bb3413a21542a82acd3b45659738d24a1f4))  - (goliatone)
+- Update deps ([8efd879](https://github.com/goliatone/go-persistence-bun/commit/8efd879a1341245ae240f5804dcb6af489f399e9))  - (goliatone)
+
 # [0.1.0](https://github.com/goliatone/go-persistence-bun/compare/v0.0.3...v0.1.0) - (2025-06-27)
 
 ## <!-- 1 -->🐛 Bug Fixes
