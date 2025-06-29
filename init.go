@@ -187,11 +187,6 @@ func (c Client) RegisterSQLMigrations(migrations ...fs.FS) *Migrations {
 	return c.migrations.RegisterSQLMigrations(migrations...)
 }
 
-// RegisterFuncMigrations adds SQL based migrations
-func (c Client) RegisterFuncMigrations(migrations ...MigratorFunc) *Migrations {
-	return c.migrations.RegisterFuncMigrations(migrations...)
-}
-
 // Rollback previously executed migrations.
 // It will rollback a group at a time.
 // See https://bun.uptrace.dev/guide/migrations.html#migration-groups-and-rollbacks.
