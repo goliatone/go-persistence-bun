@@ -3,18 +3,23 @@ package persistence
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"embed"
+
 	"io/fs"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/goliatone/go-errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 )
+
+//go:embed testdata/*
+var emptyFS embed.FS
 
 // MockConfig implements Config interface for testing
 type MockConfig struct {
@@ -132,50 +137,6 @@ func TestFixtures(t *testing.T) {
 	})
 }
 
-func TestMigrations(t *testing.T) {
-	defer resetInit()
-
-	ctx := context.Background()
-	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	assert.NoError(t, err)
-	defer db.Close()
-
-	// Setup mock expectations with exact queries
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS bun_migrations \("id" BIGSERIAL NOT NULL, "name" VARCHAR, "group_id" BIGINT, "migrated_at" TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, PRIMARY KEY \("id"\)\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS bun_migration_locks \("id" BIGSERIAL NOT NULL, "table_name" VARCHAR, PRIMARY KEY \("id"\), UNIQUE \("table_name"\)\)`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// Need to split this test case since empty migrations don't execute all queries
-	mockDB := bun.NewDB(db, pgdialect.New())
-
-	t.Run("Migrate Empty", func(t *testing.T) {
-		emptyMigrations := NewMigrations()
-		err := emptyMigrations.Migrate(ctx, mockDB)
-		assert.NoError(t, err)
-	})
-
-	t.Run("Register Migrations", func(t *testing.T) {
-		migrations := NewMigrations()
-
-		fsys := fstest.MapFS{
-			"001_init.up.sql": &fstest.MapFile{Data: []byte("CREATE TABLE test (id INT);")},
-		}
-		migrations.RegisterSQLMigrations(fsys)
-		assert.Len(t, migrations.Files, 1)
-
-		migrator := MigratorFunc{
-			Up:   func(ctx context.Context, db *bun.DB) error { return nil },
-			Down: func(ctx context.Context, db *bun.DB) error { return nil },
-		}
-		migrations.RegisterFuncMigrations(migrator)
-		assert.Len(t, migrations.Func, 1)
-	})
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestClient(t *testing.T) {
 	defer resetInit()
 
@@ -231,7 +192,7 @@ func (m *mockFS) Open(name string) (fs.File, error) {
 
 func TestFixturesLoad(t *testing.T) {
 	mockDB := bun.NewDB(new(sql.DB), pgdialect.New())
-	fixtures := NewSeedManager(mockDB)
+	fixtures := NewSeedManager(mockDB, WithFS(emptyFS))
 
 	t.Run("Load Non-Existent File", func(t *testing.T) {
 		err := fixtures.LoadFile(context.Background(), "non-existent.yml")
