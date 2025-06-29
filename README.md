@@ -71,18 +71,6 @@ defer client.Close()
 // SQL migrations
 client.RegisterSQLMigrations(migrations.FS)
 
-// Programmatic migrations
-client.RegisterFuncMigrations(persistence.MigratorFunc{
-    Up: func(ctx context.Context, db *bun.DB) error {
-        _, err := db.NewCreateTable().Model((*User)(nil)).Exec(ctx)
-        return err
-    },
-    Down: func(ctx context.Context, db *bun.DB) error {
-        _, err := db.NewDropTable().Model((*User)(nil)).Exec(ctx)
-        return err
-    },
-})
-
 // Run migrations
 if err := client.Migrate(context.Background()); err != nil {
     log.Fatal(err)
