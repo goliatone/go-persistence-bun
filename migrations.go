@@ -105,33 +105,24 @@ func (m *Migrations) run(ctx context.Context, db *bun.DB, migrations *migrate.Mi
 	return group, nil
 }
 
-// Migrate orchestrates running both Go and SQL migrations.
-// It is the responsibility of the calling application to blank import the
-// packages containing Go migrations to trigger their `init()` functions
-// relying on Bun's operations
+// Migrate runs SQL file-based migrations discovered from registered filesystems.
 func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
-	// 1) run globally registered function migrations
-	m.logger().Debug("migrations: running Go function-based migrations...")
-	goMigrationsGroup, err := m.run(ctx, db, nil) // nil uses the global collection
-	if err != nil {
-		return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to run Go migrations")
-	}
+	// Only run SQL migrations if that's all you have
+	m.logger().Debug("migrations: running SQL file-based migrations...")
 
-	// 2) fun discovered SQL migrations
 	sqlMigrations, err := m.initSQLMigrations()
 	if err != nil {
 		return err
 	}
 
 	if sqlMigrations != nil && len(sqlMigrations.Sorted()) > 0 {
-		m.logger().Debug("migrations: running SQL file-based migrations...")
 		sqlMigrationsGroup, err := m.run(ctx, db, sqlMigrations)
 		if err != nil {
 			return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to run SQL migrations")
 		}
 		m.migrations = sqlMigrationsGroup
 	} else {
-		m.migrations = goMigrationsGroup
+		m.logger().Debug("migrations: no SQL migrations found")
 	}
 
 	m.logger().Debug("migrations: all migration groups completed")
