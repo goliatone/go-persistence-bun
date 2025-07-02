@@ -1,5 +1,19 @@
 # Changelog
 
+# [0.3.0](https://github.com/goliatone/go-persistence-bun/compare/v0.2.0...v0.3.0) - (2025-07-02)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Disable global migrations since we are not using function migrations ([fab3906](https://github.com/goliatone/go-persistence-bun/commit/fab3906fc29636d939ebb9732ece59a769b04594))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.3.0 ([db69719](https://github.com/goliatone/go-persistence-bun/commit/db697190c8a7044f43468fea986aa410496ecc1b))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.2.0 ([d776da8](https://github.com/goliatone/go-persistence-bun/commit/d776da8cc91404a88d3836697949581f9b84ba6f))  - (goliatone)
+
 # [0.2.0](https://github.com/goliatone/go-persistence-bun/compare/v0.1.0...v0.2.0) - (2025-06-29)
 
 ## <!-- 1 -->🐛 Bug Fixes
