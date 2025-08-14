@@ -76,14 +76,25 @@ defer client.Close()
 ### Migrations
 
 ```go
-// SQL migrations
-client.RegisterSQLMigrations(migrations.FS)
+// SQL migrations from embedded filesystem
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+// Register migrations
+client.RegisterSQLMigrations(migrationsFS)
 
 // Run migrations
 if err := client.Migrate(context.Background()); err != nil {
     log.Fatal(err)
 }
+
+// Rollback last migration group
+if err := client.Rollback(context.Background()); err != nil {
+    log.Fatal(err)
+}
 ```
+
+For detailed migration documentation, see [MIGRATIONS.md](MIGRATIONS.md).
 
 ### Fixtures
 
