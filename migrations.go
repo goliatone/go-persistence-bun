@@ -133,7 +133,18 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 // which will be from the SQL set if it exists, otherwise from the Go set.
 // TODO: more robust implementation which requires more complex logic
 func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
-	migrator := migrate.NewMigrator(db, nil) // discover all migrations
+	sqlMigrations, err := m.initSQLMigrations()
+	if err != nil {
+		return err
+	}
+
+	if sqlMigrations == nil {
+		//no migrations registered so nothing to rollback
+		m.logger().Debug("migrations: no migrations registered to roll back")
+		return nil
+	}
+
+	migrator := migrate.NewMigrator(db, sqlMigrations)
 	if err := migrator.Init(ctx); err != nil {
 		return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to initialize migrator for rollback")
 	}
@@ -157,7 +168,18 @@ func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.M
 
 // RollbackAll rollbacks every registered migration group.
 func (m *Migrations) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
-	migrator := migrate.NewMigrator(db, nil) // discover all migrations
+	sqlMigrations, err := m.initSQLMigrations()
+	if err != nil {
+		return err
+	}
+
+	if sqlMigrations == nil {
+		//no migrations registered so nothing to rollback
+		m.logger().Debug("migrations: no migrations registered to roll back")
+		return nil
+	}
+
+	migrator := migrate.NewMigrator(db, sqlMigrations)
 	if err := migrator.Init(ctx); err != nil {
 		return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to initialize migrator for rollback")
 	}
