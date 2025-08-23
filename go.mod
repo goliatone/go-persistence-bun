@@ -4,7 +4,7 @@ go 1.23.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/goliatone/go-errors v0.7.0
+	github.com/goliatone/go-errors v0.9.0
 	github.com/goliatone/hashid v0.1.1
 	github.com/stretchr/testify v1.10.0
 	github.com/uptrace/bun v1.2.14

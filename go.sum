@@ -16,6 +16,8 @@ github.com/go-ozzo/ozzo-validation/v4 v4.3.0 h1:byhDUpfEwjsVQb1vBunvIjh2BHQ9ead5
 github.com/go-ozzo/ozzo-validation/v4 v4.3.0/go.mod h1:2NKgrcHl3z6cJs+3Oo940FPRiTzuqKbvfrL2RxCj6Ew=
 github.com/goliatone/go-errors v0.7.0 h1:F2+0oY/0jbt/PnlfLsUmIyRy0jAgvs7ciwjyJXCPMDE=
 github.com/goliatone/go-errors v0.7.0/go.mod h1:FiZEC2z5a8SBdRyljC9wFt+IzqZDfrst2dPoqWARbr4=
+github.com/goliatone/go-errors v0.9.0 h1:Jvx5aV+QgSx5ZK4zagOW5YyVCUcqEYZNVZU4V1oqUDQ=
+github.com/goliatone/go-errors v0.9.0/go.mod h1:FiZEC2z5a8SBdRyljC9wFt+IzqZDfrst2dPoqWARbr4=
 github.com/goliatone/go-repository-bun v0.4.3 h1:8cUt0EmSRf2df0xnH9RmtOcAthjMYcPrVZJlVlliWNU=
 github.com/goliatone/go-repository-bun v0.4.3/go.mod h1:XlE7pkvZs08IAdwiF8qYLmz08JadMcWkNin+fkSYyzY=
 github.com/goliatone/hashid v0.1.1 h1:VfZZf7s0uM+JZ3ZBkqaEM1mL/CJfiTmFOzZ1QuXY3EM=
