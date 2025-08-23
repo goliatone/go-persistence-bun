@@ -1,5 +1,19 @@
 # Changelog
 
+# [0.4.1](https://github.com/goliatone/go-persistence-bun/compare/v0.4.0...v0.4.1) - (2025-08-23)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.4.1 ([714ea70](https://github.com/goliatone/go-persistence-bun/commit/714ea705ae2a7c4fdcc1caf829daa1018c60ba63))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.4.0 ([bbdcb14](https://github.com/goliatone/go-persistence-bun/commit/bbdcb146c5e6feebe140e7a48e697bbe4c4330ac))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update deps ([cd2fd70](https://github.com/goliatone/go-persistence-bun/commit/cd2fd70ad30b2a05cd5019751c36b75a7fdb8fa0))  - (goliatone)
+
 # [0.4.0](https://github.com/goliatone/go-persistence-bun/compare/v0.3.0...v0.4.0) - (2025-08-14)
 
 ## <!-- 1 -->🐛 Bug Fixes
