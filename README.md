@@ -92,6 +92,19 @@ if err := client.Migrate(context.Background()); err != nil {
 if err := client.Rollback(context.Background()); err != nil {
     log.Fatal(err)
 }
+
+// Dialect-aware migrations (Postgres + SQLite)
+//go:embed data/sql/migrations/**/*
+var dialectFS embed.FS
+
+client.RegisterDialectMigrations(
+    dialectFS,
+    persistence.WithDialectSourceLabel("data/sql/migrations"),
+    persistence.WithValidationTargets("postgres", "sqlite"),
+)
+if err := client.ValidateDialects(context.Background()); err != nil {
+    log.Fatal(err)
+}
 ```
 
 For detailed migration documentation, see [MIGRATIONS.md](MIGRATIONS.md).
