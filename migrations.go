@@ -23,16 +23,18 @@ type DriverConfig interface {
 // for migrations
 // See https://bun.uptrace.dev/guide/migrations.html
 type Migrations struct {
-	mx         sync.Mutex
-	Files      []fs.FS // For SQL files
-	migrations *migrate.MigrationGroup
-	lgr        Logger
+	mx                   sync.Mutex
+	Files                []fs.FS // For SQL files
+	dialectRegistrations []dialectRegistration
+	migrations           *migrate.MigrationGroup
+	lgr                  Logger
 }
 
 func NewMigrations() *Migrations {
 	m := &Migrations{
-		Files: make([]fs.FS, 0),
-		lgr:   &defaultLogger{},
+		Files:                make([]fs.FS, 0),
+		dialectRegistrations: make([]dialectRegistration, 0),
+		lgr:                  &defaultLogger{},
 	}
 	return m
 }
@@ -56,8 +58,8 @@ func (m *Migrations) logger() Logger {
 // TODO: We should support ordering of migrations outside of the naming convention
 // for the scneario of importing migrations from a different project that might need
 // to be run before others but have a naming that would put them after
-func (m *Migrations) initSQLMigrations() (*migrate.Migrations, error) {
-	if len(m.Files) == 0 {
+func (m *Migrations) initSQLMigrations(ctx context.Context, db *bun.DB) (*migrate.Migrations, error) {
+	if len(m.Files) == 0 && len(m.dialectRegistrations) == 0 {
 		return nil, nil // Nothing to do
 	}
 
@@ -70,6 +72,29 @@ func (m *Migrations) initSQLMigrations() (*migrate.Migrations, error) {
 			).WithMetadata(map[string]any{"index": i})
 		}
 	}
+
+	for i, registration := range m.dialectRegistrations {
+		buildResult, err := registration.buildFileSystems(ctx, db)
+		if err != nil {
+			return nil, apierrors.Wrap(err,
+				apierrors.CategoryInternal,
+				"failed to prepare dialect-specific migrations",
+			).WithMetadata(map[string]any{"index": i})
+		}
+		for j, migrationFS := range buildResult.fileSystems {
+			if err := migrations.Discover(migrationFS); err != nil {
+				return nil, apierrors.Wrap(err,
+					apierrors.CategoryInternal,
+					"failed to discover dialect filesystem migrations",
+				).WithMetadata(map[string]any{"index": j, "dialect_registration": i})
+			}
+		}
+	}
+
+	if len(migrations.Sorted()) == 0 {
+		return nil, nil
+	}
+
 	return migrations, nil
 }
 
@@ -79,6 +104,45 @@ func (m *Migrations) RegisterSQLMigrations(migrations ...fs.FS) *Migrations {
 	m.Files = append(m.Files, migrations...)
 	m.mx.Unlock()
 	return m
+}
+
+// RegisterDialectMigrations registers migrations that may differ per dialect.
+func (m *Migrations) RegisterDialectMigrations(root fs.FS, opts ...DialectMigrationOption) *Migrations {
+	if root == nil {
+		return m
+	}
+
+	config := defaultDialectOptions()
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&config)
+	}
+
+	m.mx.Lock()
+	m.dialectRegistrations = append(m.dialectRegistrations, dialectRegistration{
+		root: root,
+		opts: config,
+	})
+	m.mx.Unlock()
+
+	return m
+}
+
+// ValidateDialects executes configured dialect validation callbacks.
+func (m *Migrations) ValidateDialects(ctx context.Context, db *bun.DB) error {
+	m.mx.Lock()
+	registrations := make([]dialectRegistration, len(m.dialectRegistrations))
+	copy(registrations, m.dialectRegistrations)
+	m.mx.Unlock()
+
+	for idx, registration := range registrations {
+		if err := registration.validate(ctx, db, idx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // run is a helper to execute migrations for a given collection
@@ -110,7 +174,7 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 	// Only run SQL migrations if that's all you have
 	m.logger().Debug("migrations: running SQL file-based migrations...")
 
-	sqlMigrations, err := m.initSQLMigrations()
+	sqlMigrations, err := m.initSQLMigrations(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -133,7 +197,7 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 // which will be from the SQL set if it exists, otherwise from the Go set.
 // TODO: more robust implementation which requires more complex logic
 func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
-	sqlMigrations, err := m.initSQLMigrations()
+	sqlMigrations, err := m.initSQLMigrations(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -168,7 +232,7 @@ func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.M
 
 // RollbackAll rollbacks every registered migration group.
 func (m *Migrations) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
-	sqlMigrations, err := m.initSQLMigrations()
+	sqlMigrations, err := m.initSQLMigrations(ctx, db)
 	if err != nil {
 		return err
 	}
