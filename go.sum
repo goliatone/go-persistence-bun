@@ -55,6 +55,8 @@ github.com/uptrace/bun/dbfixture v1.2.14 h1:SZY69v+pfoUA0T2XATCSAe5IDoAJEZgBrOeM
 github.com/uptrace/bun/dbfixture v1.2.14/go.mod h1:w4hhHT/7ZOr2joCH99WMcCaSPah+zuWd1fCLZ6Lmo2s=
 github.com/uptrace/bun/dialect/pgdialect v1.2.14 h1:1jmCn7zcYIJDSk1pJO//b11k9NQP1rpWZoyxfoNdpzI=
 github.com/uptrace/bun/dialect/pgdialect v1.2.14/go.mod h1:MrRlsIpWIyOCNosWuG8bVtLb80JyIER5ci0VlTa38dU=
+github.com/uptrace/bun/dialect/sqlitedialect v1.2.14 h1:eLXmNpy2TSsWJNpyIIIeLBa5M+Xxc4n8jX5ASeuvWrg=
+github.com/uptrace/bun/dialect/sqlitedialect v1.2.14/go.mod h1:oORBd9Y7RiAOHAshjuebSFNPZNPLXYcvEWmibuJ8RRk=
 github.com/uptrace/bun/extra/bundebug v1.2.14 h1:BThGgGZ83sytVqa6Kyr3uyWRDTQ0/d2/p5rNQ3HJliw=
 github.com/uptrace/bun/extra/bundebug v1.2.14/go.mod h1:dV+aN6aMACb1MGv7g2K3bs3vw5tl2lfopO96K+kqW5c=
 github.com/uptrace/bun/extra/bunotel v1.2.14 h1:LPg/1kEOcwex5w7+Boh6Rdc3xi1PuMVZV06isOPEPaU=
