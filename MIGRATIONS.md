@@ -33,6 +33,38 @@ migrations/
 - **Direction**: `.up.sql` for forward migrations, `.down.sql` for rollbacks
 - **Extension**: Must be `.sql`
 
+### Dialect Aware Layouts
+
+When a package needs to support multiple database engines (for example Postgres in production and SQLite for demos), place driver specific SQL in subdirectories. The loader will merge the folders in this order: `common/` → root files → `<dialect>/`.
+
+```
+data/sql/migrations/
+├── common/
+│   ├── 0000_common.up.sql
+│   └── 0000_common.down.sql
+├── 0001_widget.up.sql
+├── 0001_widget.down.sql
+├── 0003_annotation.up.sql           # optional annotations (see below)
+├── 0003_annotation.down.sql
+├── postgres/
+│   ├── 0002_traits.up.sql
+│   └── 0002_traits.down.sql
+└── sqlite/
+    ├── 0002_traits.up.sql
+    └── 0002_traits.down.sql
+```
+
+Statements in the root folder are universal unless you add an annotation to scope them:
+
+> See `testdata/migrations/dialect` for a working example that the unit tests load directly.
+
+```sql
+---bun:dialect:postgres
+ALTER TABLE widgets ADD COLUMN search tsvector;
+```
+
+Comma separated lists are allowed (for example `---bun:dialect:postgres,sqlite`).
+
 ## Usage
 
 ### Basic Setup
@@ -44,7 +76,7 @@ import (
     "context"
     "database/sql"
     "embed"
-    
+
     persistence "github.com/goliatone/go-persistence-bun"
     "github.com/uptrace/bun/dialect/pgdialect"
     _ "github.com/lib/pq"
@@ -59,17 +91,17 @@ func main() {
     if err != nil {
         panic(err)
     }
-    
+
     // Create persistence client
     client, err := persistence.New(config, db, pgdialect.New())
     if err != nil {
         panic(err)
     }
     defer client.Close()
-    
+
     // Register migrations
     client.RegisterSQLMigrations(migrationsFS)
-    
+
     // Run migrations
     ctx := context.Background()
     if err := client.Migrate(ctx); err != nil {
@@ -116,6 +148,45 @@ var featureMigrations embed.FS
 
 // Register both
 client.RegisterSQLMigrations(coreMigrations, featureMigrations)
+```
+
+### Dialect Specific Registration
+
+When you want the loader to automatically select Postgres or SQLite migrations, use `RegisterDialectMigrations` instead of (or in addition to) `RegisterSQLMigrations`.
+
+```go
+//go:embed data/sql/migrations/**/*
+var migrationsFS embed.FS
+
+client.RegisterDialectMigrations(
+    migrationsFS,
+    persistence.WithDialectSourceLabel("data/sql/migrations"),
+    persistence.WithValidationTargets("postgres", "sqlite"),
+)
+
+// optional safety check during startup
+if err := client.ValidateDialects(ctx); err != nil {
+    log.Fatalf("dialect validation failed: %v", err)
+}
+```
+
+By default the loader inspects `db.Dialect().Name()` to pick the correct folder, but you can override it via `WithDialectName` or `WithDialectResolver`.
+
+#### Validation Hooks
+
+`WithValidationTargets` declares which dialects must be present. If validation fails, the default callback panics with a message that lists the missing directories/files. To soften the behavior, supply your own function:
+
+```go
+client.RegisterDialectMigrations(
+    migrationsFS,
+    persistence.WithValidationTargets("postgres", "sqlite"),
+    persistence.WithDialectValidator(func(ctx context.Context, result persistence.DialectValidationResult) error {
+        for dialect, reasons := range result.MissingDialects {
+            log.Printf("dialect %s is incomplete: %v", dialect, reasons)
+        }
+        return nil // swallow error in development
+    }),
+)
 ```
 
 ### Rollback Operations
@@ -328,4 +399,4 @@ migrations := client.GetMigrations()
 
 ## Thread Safety
 
-The Migrations struct uses a mutex to ensure thread-safe registration of migration filesystems. However, migration execution should be coordinated at the application level to avoid concurrent migration attempts.
+The Migrations struct uses a mutex to ensure thread safe registration of migration filesystems. However, migration execution should be coordinated at the application level to avoid concurrent migration attempts.
