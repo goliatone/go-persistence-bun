@@ -1,5 +1,30 @@
 # Changelog
 
+# [0.6.0](https://github.com/goliatone/go-persistence-bun/compare/v0.5.0...v0.6.0) - (2025-11-10)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.6.0 ([2ad5601](https://github.com/goliatone/go-persistence-bun/commit/2ad5601294d556485491d9f754f37dfd4ba4c9f4))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Support alt migrations ([41ac54e](https://github.com/goliatone/go-persistence-bun/commit/41ac54e0603956e7de46ca41f2c0ae6798ef8ca8))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.5.0 ([6ceebb9](https://github.com/goliatone/go-persistence-bun/commit/6ceebb9065d3b39c405d697f002bc17baa1fc27f))  - (goliatone)
+
+## <!-- 30 -->📝 Other
+
+- PR [#4](https://github.com/goliatone/go-persistence-bun/pull/4): github.com/goliatone/go-persistence-bun to v0.5.2 ([026316c](https://github.com/goliatone/go-persistence-bun/commit/026316c8920f91adeaec263e25c4e934830f945e))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update deps ([9cce832](https://github.com/goliatone/go-persistence-bun/commit/9cce83237e58aabeb83504a54197ecac44958a34))  - (goliatone)
+- Update tests ([ff0ad76](https://github.com/goliatone/go-persistence-bun/commit/ff0ad76dcd09baf9c6a5e4e5821a09091c70b5b8))  - (goliatone)
+- Update docs ([07523a5](https://github.com/goliatone/go-persistence-bun/commit/07523a5ffcc26304e47905096d1701ce55678ca5))  - (goliatone)
+- **deps:** Bump github.com/goliatone/go-repository-bun to v0.5.2 ([4a55c51](https://github.com/goliatone/go-persistence-bun/commit/4a55c51bb307107d756fb4dbe72cc1db828e1cdf))  - (goliatone)
+
 # [0.5.0](https://github.com/goliatone/go-persistence-bun/compare/v0.4.2...v0.5.0) - (2025-10-03)
 
 ## <!-- 1 -->🐛 Bug Fixes
