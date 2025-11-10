@@ -187,6 +187,16 @@ func (c Client) RegisterSQLMigrations(migrations ...fs.FS) *Migrations {
 	return c.migrations.RegisterSQLMigrations(migrations...)
 }
 
+// RegisterDialectMigrations adds dialect-aware SQL migrations.
+func (c Client) RegisterDialectMigrations(root fs.FS, opts ...DialectMigrationOption) *Migrations {
+	return c.migrations.RegisterDialectMigrations(root, opts...)
+}
+
+// ValidateDialects runs validation callbacks for registered dialect migrations.
+func (c Client) ValidateDialects(ctx context.Context) error {
+	return c.migrations.ValidateDialects(ctx, c.db)
+}
+
 // Rollback previously executed migrations.
 // It will rollback a group at a time.
 // See https://bun.uptrace.dev/guide/migrations.html#migration-groups-and-rollbacks.
