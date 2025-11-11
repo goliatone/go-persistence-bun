@@ -155,11 +155,16 @@ client.RegisterSQLMigrations(coreMigrations, featureMigrations)
 When you want the loader to automatically select Postgres or SQLite migrations, use `RegisterDialectMigrations` instead of (or in addition to) `RegisterSQLMigrations`.
 
 ```go
-//go:embed data/sql/migrations/**/*
+//go:embed data/sql/migrations
 var migrationsFS embed.FS
 
+dialectFS, err := fs.Sub(migrationsFS, "data/sql/migrations")
+if err != nil {
+    panic(err)
+}
+
 client.RegisterDialectMigrations(
-    migrationsFS,
+    dialectFS,
     persistence.WithDialectSourceLabel("data/sql/migrations"),
     persistence.WithValidationTargets("postgres", "sqlite"),
 )
@@ -169,6 +174,8 @@ if err := client.ValidateDialects(ctx); err != nil {
     log.Fatalf("dialect validation failed: %v", err)
 }
 ```
+
+> **Tip:** Embed the entire `data/sql/migrations` directory (not just `*.sql` files) so the loader can see nested folders such as `common/` or `sqlite/`. Always scope the embedded FS via `fs.Sub(..., "data/sql/migrations")` before registering; the dialect resolver expects its root to map directly to the migrations layout.
 
 By default the loader inspects `db.Dialect().Name()` to pick the correct folder, but you can override it via `WithDialectName` or `WithDialectResolver`.
 
