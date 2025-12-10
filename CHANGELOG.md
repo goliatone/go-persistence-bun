@@ -1,5 +1,27 @@
 # Changelog
 
+# [0.7.0](https://github.com/goliatone/go-persistence-bun/compare/v0.6.0...v0.7.0) - (2025-12-10)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Better docs ([3ffe25c](https://github.com/goliatone/go-persistence-bun/commit/3ffe25c8c2556d60c2cafca280ee93190f93a6b8))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.7.0 ([1e7545f](https://github.com/goliatone/go-persistence-bun/commit/1e7545f2bf305801bbc0ea3c615e30fce42524ff))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Virtual expression helper ([df68fa5](https://github.com/goliatone/go-persistence-bun/commit/df68fa5168a7111705fc2086a09e80eb77593ee2))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.6.0 ([a7630a1](https://github.com/goliatone/go-persistence-bun/commit/a7630a1f092a5a7f6c4f5df75a343c84b8c84850))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Keep sqldb in client ([e10b6be](https://github.com/goliatone/go-persistence-bun/commit/e10b6be201078141437d6ad03e9b9e9bbe64b32e))  - (goliatone)
+
 # [0.6.0](https://github.com/goliatone/go-persistence-bun/compare/v0.5.0...v0.6.0) - (2025-11-10)
 
 ## <!-- 13 -->📦 Bumps
