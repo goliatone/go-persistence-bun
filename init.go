@@ -91,6 +91,7 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 		lgr:               &defaultLogger{},
 		seedsEnabled:      true,
 		migrationsEnabled: true,
+		sqlDB:             sqlDB,
 	}
 
 	// our config can optionally configure migrations enablement
