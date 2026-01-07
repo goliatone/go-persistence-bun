@@ -163,6 +163,21 @@ Optional methods that can be implemented:
 - `WithTemplateFuncs(funcMap template.FuncMap)`: Add template functions for fixtures
 - `WithFileFilter(fn func(path, name string) bool)`: Custom file filtering
 
+### Fixture Template Functions
+
+The fixture loader supports a small set of template functions when rendering seed files:
+
+- `hashid`: Generate a hashid string from a value.
+- `hashpwd`: Generate a bcrypt password hash from a value (non-deterministic across runs).
+
+Example usage in a fixture file:
+
+```yaml
+users:
+  - email: "admin@example.com"
+    password: '{{ hashpwd "admin123" }}'
+```
+
 ## API Reference
 
 ### Client Methods
