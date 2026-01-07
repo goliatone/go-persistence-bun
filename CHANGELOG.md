@@ -1,5 +1,24 @@
 # Changelog
 
+# [0.8.0](https://github.com/goliatone/go-persistence-bun/compare/v0.7.0...v0.8.0) - (2026-01-07)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.8.0 ([067a556](https://github.com/goliatone/go-persistence-bun/commit/067a556d8b5b92c75c2152d5139d0c7183373b08))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Hashpwd template func ([b5b2438](https://github.com/goliatone/go-persistence-bun/commit/b5b24380a32f4975d15ff81fcf8293c433323a71))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.7.0 ([172d197](https://github.com/goliatone/go-persistence-bun/commit/172d19711df039aa5ca5ac21fec13fefbb708789))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update readme ([9b6c382](https://github.com/goliatone/go-persistence-bun/commit/9b6c38212f8d242f9558954a513c56b23a634244))  - (goliatone)
+- Update deployment setup ([fee4556](https://github.com/goliatone/go-persistence-bun/commit/fee45566eac24bbd5bacf97d9b613e988f608f72))  - (goliatone)
+
 # [0.7.0](https://github.com/goliatone/go-persistence-bun/compare/v0.6.0...v0.7.0) - (2025-12-10)
 
 ## <!-- 1 -->🐛 Bug Fixes
