@@ -14,6 +14,7 @@ import (
 	"github.com/goliatone/hashid/pkg/hashid"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dbfixture"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Fixtures manages fixtures and seeds
@@ -206,6 +207,14 @@ func defaultFuncs() template.FuncMap {
 				return "", fmt.Errorf("failed to generate hashid for value '%s': %w", str, err)
 			}
 			return out, nil
+		},
+		"hashpwd": func(identifier reflect.Value) (string, error) {
+			str := toString(identifier)
+			out, err := bcrypt.GenerateFromPassword([]byte(str), bcrypt.DefaultCost)
+			if err != nil {
+				return "", fmt.Errorf("failed to generate password hash for value '%s': %w", str, err)
+			}
+			return string(out), nil
 		},
 	}
 }
