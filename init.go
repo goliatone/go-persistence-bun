@@ -222,12 +222,22 @@ func (c Client) DB() *bun.DB {
 	return c.db
 }
 
+// Config returns the client configuration
+func (c Client) Config() Config {
+	return c.config
+}
+
+// Ping will ping the database
+func (c Client) Ping(ctx context.Context) error {
+	return c.db.PingContext(ctx)
+}
+
 // Check will check connection
 func (c Client) Check() error {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, c.config.GetPingTimeout())
 	defer cancel()
-	return c.db.PingContext(ctx)
+	return c.Ping(ctx)
 }
 
 // MustConnect will panic if no connection
@@ -252,7 +262,7 @@ func (c *Client) Start(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, c.config.GetPingTimeout())
 	c.cancel = cancel
 
-	return c.db.PingContext(ctx)
+	return c.Ping(ctx)
 }
 
 // Stop will stop the service
