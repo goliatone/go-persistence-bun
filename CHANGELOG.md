@@ -1,5 +1,19 @@
 # Changelog
 
+# [0.9.0](https://github.com/goliatone/go-persistence-bun/compare/v0.8.0...v0.9.0) - (2026-01-08)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.9.0 ([2e83ad0](https://github.com/goliatone/go-persistence-bun/commit/2e83ad0d48832dee7416915e4fddcb0e7373d2a0))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Ping and Config methods ([f0de91d](https://github.com/goliatone/go-persistence-bun/commit/f0de91da515d56809025b07d44520fa0b335eec9))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.8.0 ([7ac2c20](https://github.com/goliatone/go-persistence-bun/commit/7ac2c20a17f16c82d060a0817d623dc48b4ad7d1))  - (goliatone)
+
 # [0.8.0](https://github.com/goliatone/go-persistence-bun/compare/v0.7.0...v0.8.0) - (2026-01-07)
 
 ## <!-- 13 -->📦 Bumps
