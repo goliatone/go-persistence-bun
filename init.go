@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
-	"github.com/uptrace/bun/extra/bundebug"
-	"github.com/uptrace/bun/extra/bunotel"
 	"github.com/uptrace/bun/migrate"
 	"github.com/uptrace/bun/schema"
 )
@@ -83,8 +81,16 @@ func RegisterMany2ManyModel(model ...any) {
 // related functionality:
 // - GetSeedsEnabled
 // - GetMigrationsEnabled
-func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
+func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect, opts ...ClientOption) (*Client, error) {
 	//var err error
+	clientOpts := &clientOptions{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(clientOpts)
+	}
+
 	client := Client{
 		config:            cfg,
 		migrations:        NewMigrations(),
@@ -107,23 +113,7 @@ func New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error) {
 	// Create a Bun db on top of it.
 	bunDB = bun.NewDB(sqlDB, dialect)
 
-	if cfg.GetDebug() {
-		// Print every query we run
-		bunDB.AddQueryHook(bundebug.NewQueryHook(
-			bundebug.WithVerbose(true),
-		))
-	} else {
-		// Print only the failed queries
-		bunDB.AddQueryHook(bundebug.NewQueryHook())
-	}
-
-	if cfg.GetOtelIdentifier() != "" {
-		bunDB.AddQueryHook(
-			bunotel.NewQueryHook(
-				bunotel.WithDBName(cfg.GetOtelIdentifier()),
-			),
-		)
-	}
+	applyQueryHooks(bunDB, cfg, clientOpts)
 
 	// NOTE: m2m models should be registered first!
 	bunDB.RegisterModel(m2mModelsToRegister...)
