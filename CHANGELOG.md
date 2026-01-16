@@ -1,5 +1,12 @@
 # Changelog
 
+# [Unreleased]
+
+## <!-- 16 -->➕ Add
+
+- Add `ClientOption` query hook API (`WithQueryHooks`, `WithQueryHooksPriority`, `WithQueryHookErrorHandler`).
+- Add opt-in bundebug/bunotel hook registration via `WithBundebug()`/`WithBunotel()` (behavior change: hooks are no longer auto-registered; pass these options to preserve prior logging/tracing).
+
 # [0.9.0](https://github.com/goliatone/go-persistence-bun/compare/v0.8.0...v0.9.0) - (2026-01-08)
 
 ## <!-- 13 -->📦 Bumps
