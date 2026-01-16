@@ -1,11 +1,25 @@
 # Changelog
 
-# [Unreleased]
+# [0.10.0](https://github.com/goliatone/go-persistence-bun/compare/v0.9.0...v0.10.0) - (2026-01-16)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.10.0 ([4b0c61b](https://github.com/goliatone/go-persistence-bun/commit/4b0c61b5f348b6b07386df518150a98529e6b4f9))  - (goliatone)
 
 ## <!-- 16 -->➕ Add
 
-- Add `ClientOption` query hook API (`WithQueryHooks`, `WithQueryHooksPriority`, `WithQueryHookErrorHandler`).
-- Add opt-in bundebug/bunotel hook registration via `WithBundebug()`/`WithBunotel()` (behavior change: hooks are no longer auto-registered; pass these options to preserve prior logging/tracing).
+- Options to constructor ([fd4ef2e](https://github.com/goliatone/go-persistence-bun/commit/fd4ef2e87c9cc8ab582407dc1036c581f138642c))  - (goliatone)
+- Client options ([05eb7c9](https://github.com/goliatone/go-persistence-bun/commit/05eb7c9bb49981affb79c078183824e14a31cd29))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.9.0 ([70ff5a2](https://github.com/goliatone/go-persistence-bun/commit/70ff5a2271a3ce28c2c8c428e9fe2b663b421698))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update changelog ([610694b](https://github.com/goliatone/go-persistence-bun/commit/610694bb980b86834fcbc29b521891e2d983108a))  - (goliatone)
+- Update readme ([c2341e0](https://github.com/goliatone/go-persistence-bun/commit/c2341e0383c792fd50af8c6863386fe6e5177f79))  - (goliatone)
+- Update tests ([17d4a08](https://github.com/goliatone/go-persistence-bun/commit/17d4a08d0edb392b7b22504d283a3067be14f1d6))  - (goliatone)
 
 # [0.9.0](https://github.com/goliatone/go-persistence-bun/compare/v0.8.0...v0.9.0) - (2026-01-08)
 
