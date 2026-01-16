@@ -73,6 +73,28 @@ if err != nil {
 defer client.Close()
 ```
 
+### Query Hooks
+
+Custom query hooks are configured via `ClientOption`s passed to `New`. Built-in
+hooks are opt-in and use config values when enabled.
+
+```go
+client, err := persistence.New(
+    config,
+    db,
+    pgdialect.New(),
+    persistence.WithQueryHooks(adm.DebugQueryHook()),
+    persistence.WithBundebug(), // uses GetDebug() for verbosity
+    persistence.WithBunotel(),  // uses GetOtelIdentifier() for DB name
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+```
+
+To control registration order, use `WithQueryHooksPriority(priority, hooks...)`.
+
 ### Migrations
 
 ```go
@@ -155,6 +177,17 @@ Optional methods that can be implemented:
 - `GetMigrationsEnabled() bool`: Enable/disable migrations
 - `GetSeedsEnabled() bool`: Enable/disable seeds/fixtures
 
+Note: `GetDebug()` and `GetOtelIdentifier()` only affect query hooks when
+`WithBundebug()` and `WithBunotel()` are supplied to `New(...)`.
+
+### Client Options
+
+- `WithQueryHooks(hooks ...bun.QueryHook)`: Register custom query hooks
+- `WithQueryHooksPriority(priority int, hooks ...bun.QueryHook)`: Register hooks with a custom priority
+- `WithQueryHookErrorHandler(handler QueryHookErrorHandler)`: Handle invalid hook registration
+- `WithBundebug()`: Enable bundebug query logging (uses `GetDebug()` for verbosity)
+- `WithBunotel()`: Enable bunotel tracing (uses `GetOtelIdentifier()` for DB name)
+
 ### Fixture Options
 
 - `WithTruncateTables()`: Truncate tables before loading fixtures
@@ -182,7 +215,7 @@ users:
 
 ### Client Methods
 
-- `New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect) (*Client, error)`: Create a new client
+- `New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect, opts ...ClientOption) (*Client, error)`: Create a new client
 - `DB() *bun.DB`: Get the underlying BUN database instance
 - `Check() error`: Check database connection
 - `MustConnect()`: Panic if connection fails
@@ -216,8 +249,8 @@ users:
 - Database connection management with connection pooling
 - SQL migrations support via filesystem
 - Fixtures/seeds support with template functions
-- OpenTelemetry integration for distributed tracing
-- Debug mode with comprehensive query logging
+- OpenTelemetry integration for distributed tracing (opt-in via `WithBunotel`)
+- Debug mode with comprehensive query logging (opt-in via `WithBundebug`)
 - Support for multiple database dialects through BUN
 - Model registration for ORM operations
 - Many-to-many relationship support
