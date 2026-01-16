@@ -67,9 +67,7 @@ func TestNew(t *testing.T) {
 	mock.ExpectPing()
 
 	mockConfig := new(MockConfig)
-	mockConfig.On("GetDebug").Return(true)
 	mockConfig.On("GetPingTimeout").Return(5 * time.Second)
-	mockConfig.On("GetOtelIdentifier").Return("")
 
 	client, err := New(mockConfig, db, pgdialect.New())
 
