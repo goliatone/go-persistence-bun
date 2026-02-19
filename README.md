@@ -95,6 +95,86 @@ defer client.Close()
 
 To control registration order, use `WithQueryHooksPriority(priority, hooks...)`.
 
+### Transaction Helper (`validation_runs` + `validation_issues`)
+
+Use `RunInTx` to atomically persist a validation run and all related issues.
+
+```go
+type ValidationRun struct {
+    bun.BaseModel `bun:"table:validation_runs"`
+    ID         int64               `bun:"id,pk,autoincrement"`
+    MerchantID string              `bun:"merchant_id,notnull"`
+    Channel    string              `bun:"channel,notnull"`
+    Status     string              `bun:"status,notnull"`
+    Counts     persistence.JSONMap `bun:"counts,type:jsonb"` // use type:json for sqlite
+}
+
+type ValidationIssue struct {
+    bun.BaseModel `bun:"table:validation_issues"`
+    ID        int64  `bun:"id,pk,autoincrement"`
+    RunID     int64  `bun:"run_id,notnull"`
+    Severity  string `bun:"severity,notnull"`
+    IssueCode string `bun:"issue_code,notnull"`
+    Message   string `bun:"message"`
+    Status    string `bun:"status,notnull"`
+}
+
+err := persistence.RunInTx(ctx, client.DB(), func(ctx context.Context, tx bun.Tx) error {
+    run := &ValidationRun{
+        MerchantID: "merchant-1",
+        Channel:    "shopify",
+        Status:     "running",
+        Counts: persistence.JSONMap{
+            "blocker": 1,
+            "warning": 2,
+            "pass":    5,
+        },
+    }
+
+    if _, err := tx.NewInsert().Model(run).Exec(ctx); err != nil {
+        return err
+    }
+    runID := run.ID
+
+    issues := []*ValidationIssue{
+        {RunID: runID, Severity: "blocker", IssueCode: "missing_tax_id", Message: "Tax ID missing", Status: "open"},
+        {RunID: runID, Severity: "warning", IssueCode: "missing_logo", Message: "Logo missing", Status: "open"},
+    }
+
+    for _, issue := range issues {
+        if _, err := tx.NewInsert().Model(issue).Exec(ctx); err != nil {
+            return err
+        }
+    }
+    return nil
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Portable JSON Types
+
+Use `JSONMap` and `JSONStringSlice` to round-trip JSON values across Postgres and SQLite.
+
+```go
+type ValidationIssue struct {
+    bun.BaseModel `bun:"table:validation_issues"`
+    ID      int64                     `bun:"id,pk,autoincrement"`
+    Meta    persistence.JSONMap       `bun:"meta,type:jsonb"` // use type:json for sqlite
+    Tags    persistence.JSONStringSlice `bun:"tags,type:jsonb"`
+}
+```
+
+For deterministic grouped counts, use `NewGroupedCountQuery`:
+
+```go
+var counts []persistence.GroupCount
+err := persistence.NewGroupedCountQuery(client.DB(), (*ValidationIssue)(nil), "severity").
+    Where("run_id = ?", runID).
+    Scan(ctx, &counts)
+```
+
 ### Migrations
 
 ```go
@@ -216,6 +296,7 @@ users:
 ### Client Methods
 
 - `New(cfg Config, sqlDB *sql.DB, dialect schema.Dialect, opts ...ClientOption) (*Client, error)`: Create a new client
+- `RunInTx(ctx context.Context, db bun.IDB, fn func(ctx context.Context, tx bun.Tx) error) error`: Run writes in one transaction with rollback safety
 - `DB() *bun.DB`: Get the underlying BUN database instance
 - `Check() error`: Check database connection
 - `MustConnect()`: Panic if connection fails
@@ -255,6 +336,8 @@ users:
 - Model registration for ORM operations
 - Many-to-many relationship support
 - Transaction support through BUN's API
+- Additive transaction helper (`RunInTx`) for portable service-level writes
+- Portable JSON wrappers (`JSONMap`, `JSONStringSlice`) for Postgres JSONB and SQLite JSON/TEXT
 - Context-aware operations
 
 ## License
