@@ -1,5 +1,27 @@
 # Changelog
 
+# [0.11.0](https://github.com/goliatone/go-persistence-bun/compare/v0.10.0...v0.11.0) - (2026-02-19)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.11.0 ([12ac6c6](https://github.com/goliatone/go-persistence-bun/commit/12ac6c6359dccd028b96da6488a73fa1866c6c7e))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Transaction helper ([8072c11](https://github.com/goliatone/go-persistence-bun/commit/8072c115414573545d5c6aaa01ae1d22ec74b4ad))  - (goliatone)
+- Json types ([437bb1c](https://github.com/goliatone/go-persistence-bun/commit/437bb1c331495b63733648546d428b0413fdcd5f))  - (goliatone)
+- Grouped counts ([ce940ce](https://github.com/goliatone/go-persistence-bun/commit/ce940ce6ced62fb5ece5a2bfb2c5748f6c4545d7))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.10.0 ([1deffdb](https://github.com/goliatone/go-persistence-bun/commit/1deffdbc92dec97f10d03e4a0c61c3a5fd4760b0))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update readme ([f7104a4](https://github.com/goliatone/go-persistence-bun/commit/f7104a4ec36937787e23e4e4caaa3b8df635b5cf))  - (goliatone)
+- Udpate deps ([7d7d996](https://github.com/goliatone/go-persistence-bun/commit/7d7d9965aad9a3de4a1b75a830bf34f074318a08))  - (goliatone)
+- Update test ([50ac10d](https://github.com/goliatone/go-persistence-bun/commit/50ac10d71b883288417c11733dcfd368eb61d9f5))  - (goliatone)
+
 # [0.10.0](https://github.com/goliatone/go-persistence-bun/compare/v0.9.0...v0.10.0) - (2026-01-16)
 
 ## <!-- 13 -->📦 Bumps
