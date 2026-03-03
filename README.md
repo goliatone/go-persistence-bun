@@ -203,6 +203,13 @@ client.RegisterDialectMigrations(
     dialectFS,
     persistence.WithDialectSourceLabel("data/sql/migrations"),
     persistence.WithValidationTargets("postgres", "sqlite"),
+    persistence.WithDialectValidationContract(persistence.DialectValidationContract{
+        MandatoryTargets:                  []string{"postgres", "sqlite"},
+        RequireAtLeastOneSQL:              true,
+        RequireUpDownPairs:                true,
+        RequireVersionParityAcrossTargets: true,
+    }),
+    persistence.WithValidateOnMigrate(true), // optional: auto-run validation before Migrate
 )
 if err := client.ValidateDialects(context.Background()); err != nil {
     log.Fatal(err)

@@ -221,6 +221,13 @@ client.RegisterDialectMigrations(
     dialectFS,
     persistence.WithDialectSourceLabel("data/sql/migrations"),
     persistence.WithValidationTargets("postgres", "sqlite"),
+    persistence.WithDialectValidationContract(persistence.DialectValidationContract{
+        MandatoryTargets:                  []string{"postgres", "sqlite"},
+        RequireAtLeastOneSQL:              true,
+        RequireUpDownPairs:                true,
+        RequireVersionParityAcrossTargets: true,
+    }),
+    persistence.WithValidateOnMigrate(true), // optional: run validation before Migrate
 )
 
 // optional safety check during startup
@@ -235,7 +242,7 @@ By default the loader inspects `db.Dialect().Name()` to pick the correct folder,
 
 #### Validation Hooks
 
-`WithValidationTargets` declares which dialects must be present. If validation fails, the default callback panics with a message that lists the missing directories/files. To soften the behavior, supply your own function:
+`WithValidationTargets` declares which dialects must be present. `WithDialectValidationContract` adds stricter, opt-in rules for what "present" means (for example requiring `.up/.down` pairs and cross-target version parity). If validation fails, the default callback panics with a message that lists the missing directories/files. To soften the behavior, supply your own function:
 
 ```go
 client.RegisterDialectMigrations(
