@@ -320,6 +320,180 @@ func TestValidateDialectsDefaultsToResolvedDialect(t *testing.T) {
 	require.Equal(t, []string{"sqlite"}, captured.CheckedDialects)
 }
 
+func TestMigrations_RegisterOrderedMigrationSourcesRejectsDuplicateNames(t *testing.T) {
+	m := NewMigrations()
+	fs := fstest.MapFS{
+		"0001_init.up.sql": {Data: []byte("SELECT 1;")},
+	}
+
+	err := m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: fs},
+		OrderedMigrationSource{Name: "go-auth", Root: fs},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate ordered migration source name")
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-users", Root: fs},
+	))
+	err = m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-users", Root: fs},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate ordered migration source name")
+}
+
+func TestOrderedMigrations_DeterministicUpOrderWithOverlappingVersions(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+
+	authFS := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE auth_users;")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE auth_users;")},
+		"0002_auth.up.sql":   {Data: []byte("ALTER TABLE auth_users ADD COLUMN active BOOL;")},
+		"0002_auth.down.sql": {Data: []byte("ALTER TABLE auth_users DROP COLUMN active;")},
+	}
+	usersFS := fstest.MapFS{
+		"0001_users.up.sql":   {Data: []byte("CREATE TABLE users;")},
+		"0001_users.down.sql": {Data: []byte("DROP TABLE users;")},
+	}
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: authFS},
+		OrderedMigrationSource{Name: "go-users", Root: usersFS},
+	))
+
+	sqlMigrations, err := m.initSQLMigrations(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sqlMigrations)
+
+	sorted := sqlMigrations.Sorted()
+	require.Len(t, sorted, 3)
+
+	upSequence := orderedSequenceFromMetadata(t, m, sorted)
+	require.Equal(t, []string{
+		"go-auth/0001",
+		"go-auth/0002",
+		"go-users/0001",
+	}, upSequence)
+}
+
+func TestOrderedMigrations_DeterministicDownOrderIsReverseOfUp(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-auth",
+			Root: fstest.MapFS{
+				"0001_auth.up.sql":   {Data: []byte("SELECT 1;")},
+				"0001_auth.down.sql": {Data: []byte("SELECT 1;")},
+			},
+		},
+		OrderedMigrationSource{
+			Name: "go-users",
+			Root: fstest.MapFS{
+				"0001_users.up.sql":   {Data: []byte("SELECT 1;")},
+				"0001_users.down.sql": {Data: []byte("SELECT 1;")},
+				"0002_users.up.sql":   {Data: []byte("SELECT 1;")},
+				"0002_users.down.sql": {Data: []byte("SELECT 1;")},
+			},
+		},
+	))
+
+	sqlMigrations, err := m.initSQLMigrations(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sqlMigrations)
+
+	up := sqlMigrations.Sorted()
+	require.Len(t, up, 3)
+	upSequence := orderedSequenceFromMetadata(t, m, up)
+
+	for i := range up {
+		up[i].ID = int64(i + 1)
+		up[i].GroupID = 1
+	}
+	down := up.Applied()
+	downSequence := orderedSequenceFromMetadata(t, m, down)
+
+	require.Equal(t, reverseStrings(append([]string(nil), upSequence...)), downSequence)
+}
+
+func TestOrderedMigrations_RejectDuplicateIdentityWithinSource(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+
+	fs := fstest.MapFS{
+		"0001_alpha.up.sql":   {Data: []byte("SELECT 1;")},
+		"0001_alpha.down.sql": {Data: []byte("SELECT 1;")},
+		"0001_beta.up.sql":    {Data: []byte("SELECT 1;")},
+	}
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: fs},
+	))
+
+	_, err := m.initSQLMigrations(ctx, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate migration identity")
+}
+
+func TestOrderedMigrations_DialectAwareLoading(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+	dirFS := os.DirFS("testdata/migrations/dialect")
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-services",
+			Root: dirFS,
+			Options: []DialectMigrationOption{
+				WithDialectName("sqlite"),
+			},
+		},
+	))
+
+	sqlMigrations, err := m.initSQLMigrations(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sqlMigrations)
+
+	sorted := sqlMigrations.Sorted()
+	sequence := orderedSequenceFromMetadata(t, m, sorted)
+	require.Equal(t, []string{
+		"go-services/0000",
+		"go-services/0001",
+		"go-services/0002",
+	}, sequence)
+}
+
+func TestValidateDialectsIncludesOrderedSources(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+	fsys := fstest.MapFS{
+		"0001_only_postgres.up.sql": {Data: []byte("---bun:dialect:postgres\nSELECT 1;")},
+	}
+
+	var captured DialectValidationResult
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-auth",
+			Root: fsys,
+			Options: []DialectMigrationOption{
+				WithValidationTargets("sqlite"),
+				WithDialectValidator(func(ctx context.Context, result DialectValidationResult) error {
+					captured = result
+					return fmt.Errorf("ordered validation failed")
+				}),
+			},
+		},
+	))
+
+	err := m.ValidateDialects(ctx, bun.NewDB(nil, pgdialect.New()))
+	require.EqualError(t, err, "ordered validation failed")
+	require.Equal(t, "go-auth", captured.SourceLabel)
+	require.Contains(t, captured.MissingDialects, "sqlite")
+}
+
 func TestMigrations_initSQLMigrations_Empty(t *testing.T) {
 	m := NewMigrations()
 
@@ -592,4 +766,30 @@ func collectFilesFromSources(t *testing.T, sources []iofs.FS) map[string]string 
 		require.NoError(t, err)
 	}
 	return files
+}
+
+func orderedSequenceFromMetadata(t *testing.T, manager *Migrations, migrations migrate.MigrationSlice) []string {
+	t.Helper()
+
+	manager.mx.Lock()
+	metadata := make(map[string]OrderedMigrationMetadata, len(manager.orderedMetadata))
+	for k, v := range manager.orderedMetadata {
+		metadata[k] = v
+	}
+	manager.mx.Unlock()
+
+	sequence := make([]string, 0, len(migrations))
+	for _, migration := range migrations {
+		meta, ok := metadata[migration.Name]
+		require.Truef(t, ok, "missing ordered metadata for migration %q", migration.Name)
+		sequence = append(sequence, fmt.Sprintf("%s/%s", meta.SourceName, meta.OriginalVersion))
+	}
+	return sequence
+}
+
+func reverseStrings(values []string) []string {
+	for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
+		values[left], values[right] = values[right], values[left]
+	}
+	return values
 }
