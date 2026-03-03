@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing/fstest"
 
@@ -27,13 +29,22 @@ type DialectValidationFunc func(ctx context.Context, result DialectValidationRes
 
 // DialectValidationResult summarizes the dialect coverage outcome for a registration.
 type DialectValidationResult struct {
-	SourceLabel      string
-	RegistrationIdx  int
-	CheckedDialects  []string
-	MissingDialects  map[string][]string
-	DialectAliases   map[string]string
-	AvailableLayers  []layerDiagnostic
-	RequestedTargets []string
+	SourceLabel        string
+	RegistrationIdx    int
+	CheckedDialects    []string
+	MissingDialects    map[string][]string
+	DialectAliases     map[string]string
+	AvailableLayers    []layerDiagnostic
+	RequestedTargets   []string
+	ValidationContract *DialectValidationContract
+}
+
+// DialectValidationContract enables stricter, opt-in source-level checks.
+type DialectValidationContract struct {
+	MandatoryTargets                  []string
+	RequireAtLeastOneSQL              bool
+	RequireUpDownPairs                bool
+	RequireVersionParityAcrossTargets bool
 }
 
 var defaultDialectAliases = map[string]string{
@@ -61,14 +72,16 @@ const (
 )
 
 type dialectOptions struct {
-	explicitDialect string
-	defaultDialect  string
-	aliases         map[string]string
-	resolver        DialectResolver
-	validator       DialectValidationFunc
-	validateDefault bool
-	rawTargets      []string
-	sourceLabel     string
+	explicitDialect   string
+	defaultDialect    string
+	aliases           map[string]string
+	resolver          DialectResolver
+	validator         DialectValidationFunc
+	validateDefault   bool
+	rawTargets        []string
+	sourceLabel       string
+	contract          *DialectValidationContract
+	validateOnMigrate bool
 }
 
 type dialectRegistration struct {
@@ -203,6 +216,28 @@ func WithDialectSourceLabel(label string) DialectMigrationOption {
 		if opts.sourceLabel == "" {
 			opts.sourceLabel = defaultDialectSourceLabel
 		}
+	}
+}
+
+// WithDialectValidationContract enables strict, opt-in dialect coverage validation.
+func WithDialectValidationContract(contract DialectValidationContract) DialectMigrationOption {
+	return func(opts *dialectOptions) {
+		if opts == nil {
+			return
+		}
+		normalized := contract
+		normalized.MandatoryTargets = normalizeDialects(contract.MandatoryTargets, opts.normalize)
+		opts.contract = &normalized
+	}
+}
+
+// WithValidateOnMigrate runs dialect validation before migration execution.
+func WithValidateOnMigrate(enabled bool) DialectMigrationOption {
+	return func(opts *dialectOptions) {
+		if opts == nil {
+			return
+		}
+		opts.validateOnMigrate = enabled
 	}
 }
 
@@ -349,6 +384,7 @@ func (r dialectRegistration) validate(ctx context.Context, db *bun.DB, idx int) 
 	targets := r.opts.validationTargets()
 	targetSet := map[string]struct{}{}
 	normalizedTargets := make([]string, 0, len(targets))
+	contract := copyDialectValidationContract(r.opts.contract)
 
 	for _, target := range targets {
 		if target == "" {
@@ -374,30 +410,69 @@ func (r dialectRegistration) validate(ctx context.Context, db *bun.DB, idx int) 
 		}
 	}
 
+	if contract != nil {
+		for _, target := range contract.MandatoryTargets {
+			if target == "" {
+				continue
+			}
+			if _, ok := targetSet[target]; ok {
+				continue
+			}
+			targetSet[target] = struct{}{}
+			normalizedTargets = append(normalizedTargets, target)
+		}
+	}
+
 	if len(normalizedTargets) == 0 {
 		return nil
 	}
 
 	result := DialectValidationResult{
-		SourceLabel:      r.opts.sourceLabel,
-		RegistrationIdx:  idx,
-		CheckedDialects:  make([]string, 0, len(normalizedTargets)),
-		MissingDialects:  map[string][]string{},
-		DialectAliases:   copyDialectAliases(r.opts.aliases),
-		RequestedTargets: append([]string(nil), normalizedTargets...),
+		SourceLabel:        r.opts.sourceLabel,
+		RegistrationIdx:    idx,
+		CheckedDialects:    make([]string, 0, len(normalizedTargets)),
+		MissingDialects:    map[string][]string{},
+		DialectAliases:     copyDialectAliases(r.opts.aliases),
+		RequestedTargets:   append([]string(nil), normalizedTargets...),
+		ValidationContract: contract,
 	}
+	inventories := make(map[string]dialectSQLInventory, len(normalizedTargets))
 
 	for _, target := range normalizedTargets {
 		buildResult, err := r.buildForDialect(target)
 		if err != nil {
 			return err
 		}
+		inventory, err := collectDialectSQLInventory(buildResult.fileSystems)
+		if err != nil {
+			return err
+		}
+		inventories[target] = inventory
+
 		result.CheckedDialects = append(result.CheckedDialects, target)
-		if buildResult.hasSQL() {
+		reasons := make([]string, 0)
+
+		requireSQL := contract == nil || contract.RequireAtLeastOneSQL
+		if requireSQL && inventory.sqlFiles == 0 {
+			reasons = append(reasons, reasonsFromDiagnostics(buildResult.diagnostics)...)
+		}
+		if contract != nil && contract.RequireUpDownPairs {
+			reasons = append(reasons, inventory.pairingReasons()...)
+		}
+
+		if len(reasons) == 0 {
 			continue
 		}
 		result.AvailableLayers = append(result.AvailableLayers, buildResult.diagnostics...)
-		result.MissingDialects[target] = reasonsFromDiagnostics(buildResult.diagnostics)
+		result.MissingDialects[target] = dedupeStrings(reasons)
+	}
+
+	if contract != nil && contract.RequireVersionParityAcrossTargets {
+		for dialect, reasons := range versionParityReasons(inventories, normalizedTargets) {
+			existing := result.MissingDialects[dialect]
+			existing = append(existing, reasons...)
+			result.MissingDialects[dialect] = dedupeStrings(existing)
+		}
 	}
 
 	if len(result.MissingDialects) == 0 {
@@ -412,6 +487,205 @@ func (r dialectRegistration) validate(ctx context.Context, db *bun.DB, idx int) 
 		return err
 	}
 	return nil
+}
+
+type dialectSQLInventory struct {
+	sqlFiles int
+	up       map[string]string
+	down     map[string]string
+}
+
+func collectDialectSQLInventory(sources []fs.FS) (dialectSQLInventory, error) {
+	inventory := dialectSQLInventory{
+		up:   make(map[string]string),
+		down: make(map[string]string),
+	}
+
+	files := make(map[string]struct{})
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		err := fs.WalkDir(source, ".", func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if path == "." || d.IsDir() {
+				return nil
+			}
+			if !strings.HasSuffix(strings.ToLower(path), sqlFileExtension) {
+				return nil
+			}
+			files[path] = struct{}{}
+			return nil
+		})
+		if err != nil {
+			return dialectSQLInventory{}, err
+		}
+	}
+
+	inventory.sqlFiles = len(files)
+	for path := range files {
+		key, direction, ok := parseMigrationKey(path)
+		if !ok {
+			continue
+		}
+		switch direction {
+		case "up":
+			inventory.up[key] = path
+		case "down":
+			inventory.down[key] = path
+		}
+	}
+	return inventory, nil
+}
+
+func parseMigrationKey(path string) (string, string, bool) {
+	lower := strings.ToLower(filepath.Clean(path))
+	switch {
+	case strings.HasSuffix(lower, ".up.sql"):
+		return strings.TrimSuffix(lower, ".up.sql"), "up", true
+	case strings.HasSuffix(lower, ".down.sql"):
+		return strings.TrimSuffix(lower, ".down.sql"), "down", true
+	default:
+		return "", "", false
+	}
+}
+
+func (i dialectSQLInventory) migrationKeys() []string {
+	set := make(map[string]struct{}, len(i.up)+len(i.down))
+	for key := range i.up {
+		set[key] = struct{}{}
+	}
+	for key := range i.down {
+		set[key] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (i dialectSQLInventory) pairingReasons() []string {
+	missingDown := make([]string, 0)
+	for key := range i.up {
+		if _, ok := i.down[key]; !ok {
+			missingDown = append(missingDown, key)
+		}
+	}
+	sort.Strings(missingDown)
+
+	missingUp := make([]string, 0)
+	for key := range i.down {
+		if _, ok := i.up[key]; !ok {
+			missingUp = append(missingUp, key)
+		}
+	}
+	sort.Strings(missingUp)
+
+	reasons := make([]string, 0, 2)
+	if len(missingDown) > 0 {
+		reasons = append(reasons, fmt.Sprintf("missing .down.sql pair for: %s", strings.Join(missingDown, ", ")))
+	}
+	if len(missingUp) > 0 {
+		reasons = append(reasons, fmt.Sprintf("missing .up.sql pair for: %s", strings.Join(missingUp, ", ")))
+	}
+	return reasons
+}
+
+func versionParityReasons(inventories map[string]dialectSQLInventory, targets []string) map[string][]string {
+	if len(targets) == 0 {
+		return nil
+	}
+
+	all := make(map[string]struct{})
+	perTarget := make(map[string]map[string]struct{}, len(targets))
+	for _, target := range targets {
+		set := make(map[string]struct{})
+		for _, key := range inventories[target].migrationKeys() {
+			set[key] = struct{}{}
+			all[key] = struct{}{}
+		}
+		perTarget[target] = set
+	}
+	if len(all) == 0 {
+		return nil
+	}
+
+	mergedKeys := make([]string, 0, len(all))
+	for key := range all {
+		mergedKeys = append(mergedKeys, key)
+	}
+	sort.Strings(mergedKeys)
+
+	out := make(map[string][]string)
+	for _, target := range targets {
+		missing := make([]string, 0)
+		for _, key := range mergedKeys {
+			if _, ok := perTarget[target][key]; !ok {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		out[target] = []string{
+			fmt.Sprintf("missing migration versions present in other targets: %s", strings.Join(missing, ", ")),
+		}
+	}
+	return out
+}
+
+func normalizeDialects(values []string, normalize func(string) string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		normalized := normalize(raw)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func copyDialectValidationContract(src *DialectValidationContract) *DialectValidationContract {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	dst.MandatoryTargets = append([]string(nil), src.MandatoryTargets...)
+	return &dst
 }
 
 type dialectFSBuilder struct {
