@@ -320,6 +320,115 @@ func TestValidateDialectsDefaultsToResolvedDialect(t *testing.T) {
 	require.Equal(t, []string{"sqlite"}, captured.CheckedDialects)
 }
 
+func TestValidateDialectsContractMandatoryTargets(t *testing.T) {
+	ctx := context.Background()
+	fsys := fstest.MapFS{
+		"postgres/0001_init.up.sql":   {Data: []byte("SELECT 1;")},
+		"postgres/0001_init.down.sql": {Data: []byte("SELECT 1;")},
+	}
+
+	m := NewMigrations()
+	var captured DialectValidationResult
+	m.RegisterDialectMigrations(
+		fsys,
+		WithDialectValidationContract(DialectValidationContract{
+			MandatoryTargets:     []string{"postgres", "sqlite"},
+			RequireAtLeastOneSQL: true,
+		}),
+		WithDialectValidator(func(ctx context.Context, result DialectValidationResult) error {
+			captured = result
+			return fmt.Errorf("contract failed")
+		}),
+	)
+
+	err := m.ValidateDialects(ctx, bun.NewDB(nil, pgdialect.New()))
+	require.EqualError(t, err, "contract failed")
+	require.Contains(t, captured.CheckedDialects, "postgres")
+	require.Contains(t, captured.CheckedDialects, "sqlite")
+	require.Contains(t, captured.MissingDialects, "sqlite")
+	require.NotContains(t, captured.MissingDialects, "postgres")
+	require.NotNil(t, captured.ValidationContract)
+}
+
+func TestValidateDialectsContractRequireUpDownPairs(t *testing.T) {
+	ctx := context.Background()
+	fsys := fstest.MapFS{
+		"sqlite/0001_users.up.sql": {Data: []byte("SELECT 1;")},
+	}
+
+	m := NewMigrations()
+	var captured DialectValidationResult
+	m.RegisterDialectMigrations(
+		fsys,
+		WithValidationTargets("sqlite"),
+		WithDialectValidationContract(DialectValidationContract{
+			RequireAtLeastOneSQL: true,
+			RequireUpDownPairs:   true,
+		}),
+		WithDialectValidator(func(ctx context.Context, result DialectValidationResult) error {
+			captured = result
+			return fmt.Errorf("up/down mismatch")
+		}),
+	)
+
+	err := m.ValidateDialects(ctx, bun.NewDB(nil, sqlitedialect.New()))
+	require.EqualError(t, err, "up/down mismatch")
+	require.Contains(t, captured.MissingDialects, "sqlite")
+	require.Contains(t, strings.Join(captured.MissingDialects["sqlite"], " "), "missing .down.sql pair")
+}
+
+func TestValidateDialectsContractRequireVersionParityAcrossTargets(t *testing.T) {
+	ctx := context.Background()
+	fsys := fstest.MapFS{
+		"postgres/0001_users.up.sql":   {Data: []byte("SELECT 1;")},
+		"postgres/0001_users.down.sql": {Data: []byte("SELECT 1;")},
+		"sqlite/0002_posts.up.sql":     {Data: []byte("SELECT 1;")},
+		"sqlite/0002_posts.down.sql":   {Data: []byte("SELECT 1;")},
+	}
+
+	m := NewMigrations()
+	var captured DialectValidationResult
+	m.RegisterDialectMigrations(
+		fsys,
+		WithValidationTargets("postgres", "sqlite"),
+		WithDialectValidationContract(DialectValidationContract{
+			RequireAtLeastOneSQL:              true,
+			RequireVersionParityAcrossTargets: true,
+		}),
+		WithDialectValidator(func(ctx context.Context, result DialectValidationResult) error {
+			captured = result
+			return fmt.Errorf("parity mismatch")
+		}),
+	)
+
+	err := m.ValidateDialects(ctx, bun.NewDB(nil, pgdialect.New()))
+	require.EqualError(t, err, "parity mismatch")
+	require.Contains(t, captured.MissingDialects, "postgres")
+	require.Contains(t, captured.MissingDialects, "sqlite")
+	require.Contains(t, strings.Join(captured.MissingDialects["postgres"], " "), "0002_posts")
+	require.Contains(t, strings.Join(captured.MissingDialects["sqlite"], " "), "0001_users")
+}
+
+func TestMigrations_MigrateRunsDialectValidationWhenEnabled(t *testing.T) {
+	ctx := context.Background()
+	fsys := fstest.MapFS{
+		"0001_only_postgres.up.sql": {Data: []byte("---bun:dialect:postgres\nSELECT 1;")},
+	}
+
+	m := NewMigrations()
+	m.RegisterDialectMigrations(
+		fsys,
+		WithValidationTargets("sqlite"),
+		WithValidateOnMigrate(true),
+		WithDialectValidator(func(ctx context.Context, result DialectValidationResult) error {
+			return fmt.Errorf("validate on migrate failed")
+		}),
+	)
+
+	err := m.Migrate(ctx, bun.NewDB(nil, pgdialect.New()))
+	require.EqualError(t, err, "validate on migrate failed")
+}
+
 func TestMigrations_RegisterOrderedMigrationSourcesRejectsDuplicateNames(t *testing.T) {
 	m := NewMigrations()
 	fs := fstest.MapFS{
@@ -490,6 +599,38 @@ func TestValidateDialectsIncludesOrderedSources(t *testing.T) {
 
 	err := m.ValidateDialects(ctx, bun.NewDB(nil, pgdialect.New()))
 	require.EqualError(t, err, "ordered validation failed")
+	require.Equal(t, "go-auth", captured.SourceLabel)
+	require.Contains(t, captured.MissingDialects, "sqlite")
+}
+
+func TestValidateDialectsContractIncludesOrderedSources(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+	fsys := fstest.MapFS{
+		"postgres/0001_only.up.sql":   {Data: []byte("SELECT 1;")},
+		"postgres/0001_only.down.sql": {Data: []byte("SELECT 1;")},
+	}
+
+	var captured DialectValidationResult
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-auth",
+			Root: fsys,
+			Options: []DialectMigrationOption{
+				WithDialectValidationContract(DialectValidationContract{
+					MandatoryTargets:     []string{"postgres", "sqlite"},
+					RequireAtLeastOneSQL: true,
+				}),
+				WithDialectValidator(func(ctx context.Context, result DialectValidationResult) error {
+					captured = result
+					return fmt.Errorf("ordered contract failed")
+				}),
+			},
+		},
+	))
+
+	err := m.ValidateDialects(ctx, bun.NewDB(nil, pgdialect.New()))
+	require.EqualError(t, err, "ordered contract failed")
 	require.Equal(t, "go-auth", captured.SourceLabel)
 	require.Contains(t, captured.MissingDialects, "sqlite")
 }
