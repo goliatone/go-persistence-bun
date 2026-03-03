@@ -150,6 +150,60 @@ var featureMigrations embed.FS
 client.RegisterSQLMigrations(coreMigrations, featureMigrations)
 ```
 
+### Ordered Multi-Source Migrations
+
+When multiple modules ship overlapping versions (for example many `0001_*.up.sql` files), use ordered sources to keep execution deterministic without renaming downstream files.
+
+```go
+orderedSources := []persistence.OrderedMigrationSource{
+    {
+        Name: "go-auth",
+        Root: authMigrationsFS,
+    },
+    {
+        Name: "go-users",
+        Root: usersMigrationsFS,
+    },
+    {
+        Name: "go-services",
+        Root: servicesMigrationsFS,
+        Options: []persistence.DialectMigrationOption{
+            persistence.WithValidationTargets("postgres", "sqlite"),
+        },
+    },
+    {
+        Name: "app-local",
+        Root: appMigrationsFS,
+        Options: []persistence.DialectMigrationOption{
+            persistence.WithDialectSourceLabel("app-local"),
+        },
+    },
+}
+
+if err := client.RegisterOrderedMigrationSources(orderedSources...); err != nil {
+    log.Fatalf("register ordered sources: %v", err)
+}
+```
+
+Execution order is:
+
+1. source order as registered (`go-auth` → `go-users` → `go-services` → `app-local`)
+2. migration version order inside each source
+
+Rollback is always the strict reverse of applied order.
+
+#### Collision Strategy
+
+- Migrations are tracked internally with a synthetic, source-aware identity.
+- This prevents collisions when different sources reuse the same version number.
+- Original source/version/file metadata is preserved for logs and debugging.
+
+#### Duplicate Checks
+
+- Duplicate source names are rejected during registration.
+- Duplicate migration identities within the same source/layer are rejected during discovery.
+- Dialect overrides still work with existing layer precedence (`common` → root → dialect).
+
 ### Dialect Specific Registration
 
 When you want the loader to automatically select Postgres or SQLite migrations, use `RegisterDialectMigrations` instead of (or in addition to) `RegisterSQLMigrations`.

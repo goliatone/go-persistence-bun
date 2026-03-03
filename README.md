@@ -307,6 +307,7 @@ users:
 
 - `Migrate(ctx context.Context) error`: Run pending migrations
 - `RegisterSQLMigrations(migrations ...fs.FS) *Migrations`: Register SQL migrations
+- `RegisterOrderedMigrationSources(sources ...OrderedMigrationSource) error`: Register ordered, source-aware SQL migration sources
 - `GetMigrations() *Migrations`: Get migrations manager
 - `Rollback(ctx context.Context, opts ...migrate.MigrationOption) error`: Rollback one migration group
 - `RollbackAll(ctx context.Context, opts ...migrate.MigrationOption) error`: Rollback all migrations
