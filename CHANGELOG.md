@@ -1,5 +1,32 @@
 # Changelog
 
+# [0.12.0](https://github.com/goliatone/go-persistence-bun/compare/v0.11.0...v0.12.0) - (2026-03-03)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Dialect migration normalization ([e99db62](https://github.com/goliatone/go-persistence-bun/commit/e99db6240de0bf36748ff975d91d1843b0829fdd))  - (goliatone)
+- Use const for label text ([9e306eb](https://github.com/goliatone/go-persistence-bun/commit/9e306ebd8091b1e8f41dd70b2deab232fd9d8be9))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.12.0 ([7887334](https://github.com/goliatone/go-persistence-bun/commit/788733442dc35bbc1193f59187064fd44bcb53c7))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Validate migration dialecs on migrate ([61126af](https://github.com/goliatone/go-persistence-bun/commit/61126af3d169851df91d731cbe126c1ba05d1c25))  - (goliatone)
+- Register ordered migration ources ([91d8503](https://github.com/goliatone/go-persistence-bun/commit/91d8503737b5aac8461a7555d60fb5f4f0b274ab))  - (goliatone)
+- Ordered migration support ([e091396](https://github.com/goliatone/go-persistence-bun/commit/e09139694328a46fae8e7c7cadeecc07bfb58c5b))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.11.0 ([0307d04](https://github.com/goliatone/go-persistence-bun/commit/0307d041ba5fa138301fa33896d1107b13d76f3a))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update docs ([ceecd4a](https://github.com/goliatone/go-persistence-bun/commit/ceecd4a292987a9e520180f85d00b7f3da4caac5))  - (goliatone)
+- Update testst ([6611cad](https://github.com/goliatone/go-persistence-bun/commit/6611cadfc57a5836de814eab1e07dc0e86a5572b))  - (goliatone)
+- Update test ([5b0f32a](https://github.com/goliatone/go-persistence-bun/commit/5b0f32a929db15dec73e9d5bc76c296fe6717c84))  - (goliatone)
+
 # [0.11.0](https://github.com/goliatone/go-persistence-bun/compare/v0.10.0...v0.11.0) - (2026-02-19)
 
 ## <!-- 13 -->📦 Bumps
