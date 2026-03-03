@@ -3,8 +3,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
-
-	// "fmt" is no longer needed
+	"fmt"
 	"io/fs"
 	"strings"
 	"sync"
@@ -26,6 +25,8 @@ type Migrations struct {
 	mx                   sync.Mutex
 	Files                []fs.FS // For SQL files
 	dialectRegistrations []dialectRegistration
+	orderedRegistrations []orderedSourceRegistration
+	orderedMetadata      map[string]OrderedMigrationMetadata
 	migrations           *migrate.MigrationGroup
 	lgr                  Logger
 }
@@ -34,6 +35,8 @@ func NewMigrations() *Migrations {
 	m := &Migrations{
 		Files:                make([]fs.FS, 0),
 		dialectRegistrations: make([]dialectRegistration, 0),
+		orderedRegistrations: make([]orderedSourceRegistration, 0),
+		orderedMetadata:      make(map[string]OrderedMigrationMetadata),
 		lgr:                  &defaultLogger{},
 	}
 	return m
@@ -59,12 +62,18 @@ func (m *Migrations) logger() Logger {
 // for the scneario of importing migrations from a different project that might need
 // to be run before others but have a naming that would put them after
 func (m *Migrations) initSQLMigrations(ctx context.Context, db *bun.DB) (*migrate.Migrations, error) {
-	if len(m.Files) == 0 && len(m.dialectRegistrations) == 0 {
+	m.mx.Lock()
+	files := append([]fs.FS(nil), m.Files...)
+	dialectRegistrations := append([]dialectRegistration(nil), m.dialectRegistrations...)
+	orderedRegistrations := append([]orderedSourceRegistration(nil), m.orderedRegistrations...)
+	m.mx.Unlock()
+
+	if len(files) == 0 && len(dialectRegistrations) == 0 && len(orderedRegistrations) == 0 {
 		return nil, nil // Nothing to do
 	}
 
 	migrations := migrate.NewMigrations()
-	for i, migrationFS := range m.Files {
+	for i, migrationFS := range files {
 		if err := migrations.Discover(migrationFS); err != nil {
 			return nil, apierrors.Wrap(err,
 				apierrors.CategoryInternal,
@@ -73,7 +82,7 @@ func (m *Migrations) initSQLMigrations(ctx context.Context, db *bun.DB) (*migrat
 		}
 	}
 
-	for i, registration := range m.dialectRegistrations {
+	for i, registration := range dialectRegistrations {
 		buildResult, err := registration.buildFileSystems(ctx, db)
 		if err != nil {
 			return nil, apierrors.Wrap(err,
@@ -90,6 +99,18 @@ func (m *Migrations) initSQLMigrations(ctx context.Context, db *bun.DB) (*migrat
 			}
 		}
 	}
+
+	orderedMigrations, orderedMetadata, err := buildOrderedMigrations(ctx, db, orderedRegistrations)
+	if err != nil {
+		return nil, err
+	}
+	for _, migration := range orderedMigrations {
+		migrations.Add(migration)
+	}
+
+	m.mx.Lock()
+	m.orderedMetadata = orderedMetadata
+	m.mx.Unlock()
 
 	if len(migrations.Sorted()) == 0 {
 		return nil, nil
@@ -130,15 +151,67 @@ func (m *Migrations) RegisterDialectMigrations(root fs.FS, opts ...DialectMigrat
 	return m
 }
 
+// RegisterOrderedMigrationSources registers ordered SQL migration sources.
+func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigrationSource) error {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	seen := make(map[string]struct{}, len(m.orderedRegistrations)+len(sources))
+	for _, existing := range m.orderedRegistrations {
+		seen[existing.name] = struct{}{}
+	}
+
+	for idx, source := range sources {
+		name := strings.TrimSpace(source.Name)
+		if name == "" {
+			return fmt.Errorf("ordered migration source at index %d has empty name", idx)
+		}
+		if source.Root == nil {
+			return fmt.Errorf("ordered migration source %q has nil root filesystem", name)
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("duplicate ordered migration source name %q", name)
+		}
+		seen[name] = struct{}{}
+
+		opts := defaultDialectOptions()
+		for _, opt := range source.Options {
+			if opt == nil {
+				continue
+			}
+			opt(&opts)
+		}
+		if opts.sourceLabel == defaultDialectSourceLabel {
+			opts.sourceLabel = name
+		}
+
+		m.orderedRegistrations = append(m.orderedRegistrations, orderedSourceRegistration{
+			name: name,
+			registration: dialectRegistration{
+				root: source.Root,
+				opts: opts,
+			},
+		})
+	}
+
+	return nil
+}
+
 // ValidateDialects executes configured dialect validation callbacks.
 func (m *Migrations) ValidateDialects(ctx context.Context, db *bun.DB) error {
 	m.mx.Lock()
 	registrations := make([]dialectRegistration, len(m.dialectRegistrations))
 	copy(registrations, m.dialectRegistrations)
+	orderedRegistrations := append([]orderedSourceRegistration(nil), m.orderedRegistrations...)
 	m.mx.Unlock()
 
 	for idx, registration := range registrations {
 		if err := registration.validate(ctx, db, idx); err != nil {
+			return err
+		}
+	}
+	for idx, registration := range orderedRegistrations {
+		if err := registration.registration.validate(ctx, db, idx); err != nil {
 			return err
 		}
 	}
@@ -164,6 +237,7 @@ func (m *Migrations) run(ctx context.Context, db *bun.DB, migrations *migrate.Mi
 		m.logger().Debug("migrations: no new migrations were applied in this group")
 	} else {
 		m.logger().Debug("migrations: successfully applied migration group", "group", group.String())
+		m.logOrderedGroup(group.Migrations)
 	}
 
 	return group, nil
@@ -225,6 +299,7 @@ func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.M
 	m.migrations = group
 	if group != nil && !group.IsZero() {
 		m.logger().Debug("migrations: successfully rolled back migration group", "group", group.String())
+		m.logOrderedGroup(group.Migrations)
 	}
 
 	return nil
@@ -262,6 +337,7 @@ func (m *Migrations) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrat
 		}
 		lastGroup = group
 		m.logger().Debug("migrations: rolled back group", "group", group.String())
+		m.logOrderedGroup(group.Migrations)
 	}
 
 	m.migrations = lastGroup
@@ -273,4 +349,30 @@ func (m *Migrations) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrat
 // failed.
 func (m *Migrations) Report() *migrate.MigrationGroup {
 	return m.migrations
+}
+
+func (m *Migrations) logOrderedGroup(migrations migrate.MigrationSlice) {
+	if len(migrations) == 0 {
+		return
+	}
+	m.mx.Lock()
+	metadata := make(map[string]OrderedMigrationMetadata, len(m.orderedMetadata))
+	for k, v := range m.orderedMetadata {
+		metadata[k] = v
+	}
+	m.mx.Unlock()
+	for _, migration := range migrations {
+		meta, ok := metadata[migration.Name]
+		if !ok {
+			continue
+		}
+		m.logger().Debug(
+			"migrations: ordered source migration",
+			"synthetic", migration.Name,
+			"source", meta.SourceName,
+			"version", meta.OriginalVersion,
+			"up", meta.UpPath,
+			"down", meta.DownPath,
+		)
+	}
 }
