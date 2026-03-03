@@ -248,6 +248,12 @@ func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
 	// Only run SQL migrations if that's all you have
 	m.logger().Debug("migrations: running SQL file-based migrations...")
 
+	if m.shouldValidateDialectsOnMigrate() {
+		if err := m.ValidateDialects(ctx, db); err != nil {
+			return err
+		}
+	}
+
 	sqlMigrations, err := m.initSQLMigrations(ctx, db)
 	if err != nil {
 		return err
@@ -375,4 +381,23 @@ func (m *Migrations) logOrderedGroup(migrations migrate.MigrationSlice) {
 			"down", meta.DownPath,
 		)
 	}
+}
+
+func (m *Migrations) shouldValidateDialectsOnMigrate() bool {
+	m.mx.Lock()
+	dialectRegistrations := append([]dialectRegistration(nil), m.dialectRegistrations...)
+	orderedRegistrations := append([]orderedSourceRegistration(nil), m.orderedRegistrations...)
+	m.mx.Unlock()
+
+	for _, registration := range dialectRegistrations {
+		if registration.opts.validateOnMigrate {
+			return true
+		}
+	}
+	for _, registration := range orderedRegistrations {
+		if registration.registration.opts.validateOnMigrate {
+			return true
+		}
+	}
+	return false
 }
