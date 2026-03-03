@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	commonDirName           = "common"
-	defaultDialectName      = "postgres"
-	dialectAnnotationPrefix = "---bun:dialect:"
-	sqlFileExtension        = ".sql"
+	commonDirName             = "common"
+	defaultDialectName        = "postgres"
+	defaultDialectSourceLabel = "<embedded fs>"
+	dialectAnnotationPrefix   = "---bun:dialect:"
+	sqlFileExtension          = ".sql"
 )
 
 // DialectValidationFunc is invoked when validation detects missing coverage.
@@ -101,7 +102,7 @@ func defaultDialectOptions() dialectOptions {
 	return dialectOptions{
 		defaultDialect: defaultDialectName,
 		aliases:        copyDialectAliases(defaultDialectAliases),
-		sourceLabel:    "<embedded fs>",
+		sourceLabel:    defaultDialectSourceLabel,
 	}
 }
 
@@ -200,7 +201,7 @@ func WithDialectSourceLabel(label string) DialectMigrationOption {
 		}
 		opts.sourceLabel = strings.TrimSpace(label)
 		if opts.sourceLabel == "" {
-			opts.sourceLabel = "<embedded fs>"
+			opts.sourceLabel = defaultDialectSourceLabel
 		}
 	}
 }
@@ -644,7 +645,7 @@ func defaultDialectValidator(_ context.Context, result DialectValidationResult) 
 	var b strings.Builder
 	label := result.SourceLabel
 	if label == "" {
-		label = "<embedded fs>"
+		label = defaultDialectSourceLabel
 	}
 	fmt.Fprintf(&b, "dialect migrations validation failed for %s (registration #%d)", label, result.RegistrationIdx)
 	for dialect, reasons := range result.MissingDialects {
