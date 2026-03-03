@@ -183,6 +183,11 @@ func (c Client) RegisterDialectMigrations(root fs.FS, opts ...DialectMigrationOp
 	return c.migrations.RegisterDialectMigrations(root, opts...)
 }
 
+// RegisterOrderedMigrationSources adds ordered, source-aware SQL migration sources.
+func (c Client) RegisterOrderedMigrationSources(sources ...OrderedMigrationSource) error {
+	return c.migrations.RegisterOrderedMigrationSources(sources...)
+}
+
 // ValidateDialects runs validation callbacks for registered dialect migrations.
 func (c Client) ValidateDialects(ctx context.Context) error {
 	return c.migrations.ValidateDialects(ctx, c.db)
