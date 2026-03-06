@@ -108,10 +108,15 @@ func compileOrderedSourceMigrations(
 	entries := make(map[string]*orderedSourceEntry)
 
 	for layerIdx, currentFS := range layerFS {
+		discovered, err := discoverLayerMigrations(currentFS)
+		if err != nil {
+			return nil, nil, err
+		}
+
 		layerSeen := make(map[orderedLayerIdentity]string)
 		layerComments := make(map[string]string)
 
-		err := fs.WalkDir(currentFS, ".", func(path string, d fs.DirEntry, walkErr error) error {
+		err = fs.WalkDir(currentFS, ".", func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
@@ -155,12 +160,24 @@ func compileOrderedSourceMigrations(
 				entries[version] = entry
 			}
 
-			migrationFunc := migrate.NewSQLMigrationFunc(currentFS, path)
+			layerMigration, exists := discovered[version]
+			if !exists {
+				return fmt.Errorf("missing discovered migration in source %q for version %q and path %q", sourceName, version, path)
+			}
+
 			switch direction {
 			case orderedDirectionUp:
+				if layerMigration.Up == nil {
+					return fmt.Errorf("missing up migration function in source %q for version %q and path %q", sourceName, version, path)
+				}
+				migrationFunc := layerMigration.Up
 				entry.migration.Up = migrationFunc
 				entry.upPath = path
 			case orderedDirectionDown:
+				if layerMigration.Down == nil {
+					return fmt.Errorf("missing down migration function in source %q for version %q and path %q", sourceName, version, path)
+				}
+				migrationFunc := layerMigration.Down
 				entry.migration.Down = migrationFunc
 				entry.downPath = path
 			}
@@ -209,6 +226,20 @@ func compileOrderedSourceMigrations(
 	}
 
 	return migrations, metadata, nil
+}
+
+func discoverLayerMigrations(layer fs.FS) (map[string]migrate.Migration, error) {
+	migrations := migrate.NewMigrations()
+	if err := migrations.Discover(layer); err != nil {
+		return nil, err
+	}
+
+	sorted := migrations.Sorted()
+	out := make(map[string]migrate.Migration, len(sorted))
+	for _, migration := range sorted {
+		out[migration.Name] = migration
+	}
+	return out, nil
 }
 
 func parseOrderedMigrationFile(path string) (string, string, orderedDirection, bool, error) {
