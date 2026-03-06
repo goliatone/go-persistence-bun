@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Bug Fixes
+
+- Removed dependency on `migrate.NewSQLMigrationFunc`; Bun 1.2.x compatible without downstream pinning.
+
 # [0.12.0](https://github.com/goliatone/go-persistence-bun/compare/v0.11.0...v0.12.0) - (2026-03-03)
 
 ## <!-- 1 -->🐛 Bug Fixes
