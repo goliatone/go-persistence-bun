@@ -1,10 +1,23 @@
 # Changelog
 
-## Unreleased
+# [0.13.0](https://github.com/goliatone/go-persistence-bun/compare/v0.12.0...v0.13.0) - (2026-03-06)
 
-### 🐛 Bug Fixes
+## <!-- 1 -->🐛 Bug Fixes
 
-- Removed dependency on `migrate.NewSQLMigrationFunc`; Bun 1.2.x compatible without downstream pinning.
+- Use new bun api for ordered migrations ([d29c7e6](https://github.com/goliatone/go-persistence-bun/commit/d29c7e67b4b37e2e717eff611b239a629f78414f))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.13.0 ([5bff768](https://github.com/goliatone/go-persistence-bun/commit/5bff76834518edc4cdad7c987b16141dd45fd20a))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.12.0 ([3523937](https://github.com/goliatone/go-persistence-bun/commit/3523937fc077259dd04fd8aee89f551f56d6691f))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Udpate docs ([baa28cb](https://github.com/goliatone/go-persistence-bun/commit/baa28cb8a5d36160e9ebeb006c5af4ad9ec91ff6))  - (goliatone)
+- Udpate deps ([04e84a4](https://github.com/goliatone/go-persistence-bun/commit/04e84a4aaf8f106e5e183b38088577ba69e68e41))  - (goliatone)
 
 # [0.12.0](https://github.com/goliatone/go-persistence-bun/compare/v0.11.0...v0.12.0) - (2026-03-03)
 
