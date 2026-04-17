@@ -91,9 +91,10 @@ type dialectRegistration struct {
 }
 
 type dialectBuildResult struct {
-	dialect     string
-	fileSystems []fs.FS
-	diagnostics []layerDiagnostic
+	dialect      string
+	fileSystems  []fs.FS
+	sourceLayers []migrationSourceLayer
+	diagnostics  []layerDiagnostic
 }
 
 func (r dialectBuildResult) hasSQL() bool {
@@ -697,9 +698,10 @@ type dialectFSBuilder struct {
 
 func (b dialectFSBuilder) build() (dialectBuildResult, error) {
 	result := dialectBuildResult{
-		dialect:     b.dialect,
-		fileSystems: make([]fs.FS, 0, 3),
-		diagnostics: make([]layerDiagnostic, 0, 3),
+		dialect:      b.dialect,
+		fileSystems:  make([]fs.FS, 0, 3),
+		sourceLayers: make([]migrationSourceLayer, 0, 3),
+		diagnostics:  make([]layerDiagnostic, 0, 3),
 	}
 
 	if fsCommon, diag, err := b.buildCommonLayer(); err != nil {
@@ -709,6 +711,10 @@ func (b dialectFSBuilder) build() (dialectBuildResult, error) {
 		result.diagnostics = append(result.diagnostics, diag)
 		if fsCommon != nil {
 			result.fileSystems = append(result.fileSystems, fsCommon)
+			result.sourceLayers = append(result.sourceLayers, migrationSourceLayer{
+				fsys:       fsCommon,
+				pathPrefix: commonDirName,
+			})
 		}
 	}
 
@@ -719,6 +725,10 @@ func (b dialectFSBuilder) build() (dialectBuildResult, error) {
 		result.diagnostics = append(result.diagnostics, diag)
 		if fsRoot != nil {
 			result.fileSystems = append(result.fileSystems, fsRoot)
+			result.sourceLayers = append(result.sourceLayers, migrationSourceLayer{
+				fsys:       fsRoot,
+				pathPrefix: "",
+			})
 		}
 	}
 
@@ -729,6 +739,10 @@ func (b dialectFSBuilder) build() (dialectBuildResult, error) {
 		result.diagnostics = append(result.diagnostics, diag)
 		if fsDialect != nil {
 			result.fileSystems = append(result.fileSystems, fsDialect)
+			result.sourceLayers = append(result.sourceLayers, migrationSourceLayer{
+				fsys:       fsDialect,
+				pathPrefix: diag.Name,
+			})
 		}
 	}
 
