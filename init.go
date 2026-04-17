@@ -165,6 +165,16 @@ func (c Client) Migrate(ctx context.Context) error {
 	return c.migrations.Migrate(ctx, c.db)
 }
 
+// MigrateSources runs migrations for a selected subset of registered sources.
+func (c Client) MigrateSources(ctx context.Context, sourceNames ...string) error {
+	if !c.migrationsEnabled {
+		c.lgr.Warn("[WARN] persistence migrations are disabled")
+		return nil
+	}
+
+	return c.migrations.MigrateSources(ctx, c.db, sourceNames...)
+}
+
 // RegisterFixtures adds file based fixtures
 func (c Client) RegisterFixtures(migrations ...fs.FS) *Fixtures {
 	for _, f := range migrations {
@@ -191,6 +201,21 @@ func (c Client) RegisterOrderedMigrationSources(sources ...OrderedMigrationSourc
 // ValidateDialects runs validation callbacks for registered dialect migrations.
 func (c Client) ValidateDialects(ctx context.Context) error {
 	return c.migrations.ValidateDialects(ctx, c.db)
+}
+
+// Plan resolves the current migration plan for all registered sources.
+func (c Client) Plan(ctx context.Context) (*MigrationPlan, error) {
+	return c.migrations.Plan(ctx, c.db)
+}
+
+// PlanSources resolves the migration plan for a selected subset of sources.
+func (c Client) PlanSources(ctx context.Context, sourceNames ...string) (*MigrationPlan, error) {
+	return c.migrations.PlanSources(ctx, c.db, sourceNames...)
+}
+
+// LastPlan returns the last resolved migration plan.
+func (c Client) LastPlan() *MigrationPlan {
+	return c.migrations.LastPlan()
 }
 
 // Rollback previously executed migrations.
