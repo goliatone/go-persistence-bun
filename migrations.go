@@ -318,8 +318,8 @@ func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.M
 	m.cacheResolvedPlan(resolved)
 
 	migrator := migrate.NewMigrator(db, sqlMigrations)
-	if err := migrator.Init(ctx); err != nil {
-		return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to initialize migrator for rollback")
+	if initErr := migrator.Init(ctx); initErr != nil {
+		return apierrors.Wrap(initErr, apierrors.CategoryOperation, "failed to initialize migrator for rollback")
 	}
 
 	group, err := migrator.Rollback(ctx, opts...)
