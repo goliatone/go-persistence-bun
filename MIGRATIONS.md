@@ -246,6 +246,8 @@ if err := client.MigrateSources(ctx, "go-auth"); err != nil {
 
 `PlanSources` and `MigrateSources` accept ordered source names directly. Plain and dialect registrations also appear in plans with deterministic auto-generated names such as `sql[1]` or `dialect[1]`.
 
+Selective planning/execution is only considered safe when the selected migrations do not share Bun migration names with excluded sources. If they do, the library now returns an explicit error and the long-term fix is to move those colliding trees into `RegisterOrderedMigrationSources`, which gives them source-aware synthetic names.
+
 #### Why There Is No Dependency Graph
 
 `OrderedMigrationSource` still uses registration order instead of explicit `depends_on` metadata.
