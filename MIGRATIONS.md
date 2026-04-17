@@ -203,6 +203,58 @@ Rollback is always the strict reverse of applied order.
 - Duplicate source names are rejected during registration.
 - Duplicate migration identities within the same source/layer are rejected during discovery.
 - Dialect overrides still work with existing layer precedence (`common` → root → dialect).
+- If two plain or dialect registrations resolve to the same migration version, planning/execution now fails early with an ambiguity error. Use ordered sources when different packages intentionally reuse version numbers.
+
+#### Planning and Selective Execution
+
+Use `Plan()` to inspect the resolved execution order before anything runs, or `PlanSources()` to inspect only a subset.
+
+```go
+plan, err := client.Plan(ctx)
+if err != nil {
+    log.Fatalf("plan migrations: %v", err)
+}
+
+for _, entry := range plan.Entries {
+    log.Printf(
+        "order=%d source=%s synthetic=%s version=%s comment=%s up=%s down=%s dialect=%s applied=%v",
+        entry.ExecutionOrder,
+        entry.SourceName,
+        entry.SyntheticName,
+        entry.OriginalVersion,
+        entry.OriginalComment,
+        entry.UpPath,
+        entry.DownPath,
+        entry.Dialect,
+        entry.Applied,
+    )
+}
+```
+
+If you only want one package tree:
+
+```go
+subset, err := client.PlanSources(ctx, "go-auth")
+if err != nil {
+    log.Fatalf("plan go-auth migrations: %v", err)
+}
+
+if err := client.MigrateSources(ctx, "go-auth"); err != nil {
+    log.Fatalf("migrate go-auth: %v", err)
+}
+```
+
+`PlanSources` and `MigrateSources` accept ordered source names directly. Plain and dialect registrations also appear in plans with deterministic auto-generated names such as `sql[1]` or `dialect[1]`.
+
+#### Why There Is No Dependency Graph
+
+`OrderedMigrationSource` still uses registration order instead of explicit `depends_on` metadata.
+
+- Registration order is already deterministic and easy to test.
+- Rollback semantics remain straightforward because Bun still rolls back in strict reverse application order.
+- Adding a dependency graph would increase surface area without improving the core ambiguity/visibility problem this package needs to solve.
+
+If your application needs a different order, register ordered sources in that order and confirm it with `Plan()` during startup.
 
 ### Dialect Specific Registration
 
@@ -287,6 +339,25 @@ if report != nil && !report.IsZero() {
     fmt.Printf("Last migration group: %s\n", report.String())
     for _, m := range report.Migrations {
         fmt.Printf("  - %s\n", m.Name)
+    }
+}
+```
+
+For source-aware reporting, inspect the last resolved plan:
+
+```go
+plan := client.LastPlan()
+if plan != nil {
+    for _, entry := range plan.Entries {
+        fmt.Printf(
+            "[%d] %s %s (%s_%s) applied=%v\n",
+            entry.ExecutionOrder,
+            entry.SourceName,
+            entry.SyntheticName,
+            entry.OriginalVersion,
+            entry.OriginalComment,
+            entry.Applied,
+        )
     }
 }
 ```
