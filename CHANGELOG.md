@@ -1,5 +1,31 @@
 # Changelog
 
+# [0.13.1](https://github.com/goliatone/go-persistence-bun/compare/v0.13.0...v0.13.1) - (2026-04-17)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Json map coerce value to string ([fc55769](https://github.com/goliatone/go-persistence-bun/commit/fc557696db1fea74e4e4ab8740f953dbd6209660))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.13.1 ([d71c358](https://github.com/goliatone/go-persistence-bun/commit/d71c3580661e0a6e1ccd57a6c8bb6dee711afc54))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Migration plan to support sources ([4573ffe](https://github.com/goliatone/go-persistence-bun/commit/4573ffe7777bb67a05ff5901e6f3baa027c0b1b3))  - (goliatone)
+- Migration cache and planning ([7b1526c](https://github.com/goliatone/go-persistence-bun/commit/7b1526c07dc1751b5332192646473ba699dcfd10))  - (goliatone)
+- Include source in migration plans ([1ee36c4](https://github.com/goliatone/go-persistence-bun/commit/1ee36c4c8f316246665c06dbfa2074fd6e79d8f7))  - (goliatone)
+- Include source name in dialect ([8437ecd](https://github.com/goliatone/go-persistence-bun/commit/8437ecd6ddc9e24e594605faf22db0c871d2e7ae))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.13.0 ([d6d42a7](https://github.com/goliatone/go-persistence-bun/commit/d6d42a7f740c95825bb3b02de9ae6df8b1deb0ed))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update docs ([7b75666](https://github.com/goliatone/go-persistence-bun/commit/7b75666c5411ea104300168a4780a8a6e07d75ac))  - (goliatone)
+- Update tests ([0720e0b](https://github.com/goliatone/go-persistence-bun/commit/0720e0b6f659a58b53de0ec9b7c8495e46f653c0))  - (goliatone)
+
 # [0.13.0](https://github.com/goliatone/go-persistence-bun/compare/v0.12.0...v0.13.0) - (2026-03-06)
 
 ## <!-- 1 -->🐛 Bug Fixes
