@@ -79,7 +79,7 @@ func buildOrderedMigrations(
 			).WithMetadata(map[string]any{"source_index": source.sequence, "source_name": source.name})
 		}
 
-		sourceMigrations, sourceMeta, err := compileOrderedSourceMigrations(source.name, source.sequence, buildResult.fileSystems)
+		sourceMigrations, sourceMeta, err := compileOrderedSourceMigrations(source.name, source.sequence, buildResult.sourceLayers)
 		if err != nil {
 			return nil, nil, apierrors.Wrap(err,
 				apierrors.CategoryInternal,
@@ -99,12 +99,12 @@ func buildOrderedMigrations(
 func compileOrderedSourceMigrations(
 	sourceName string,
 	sourceIdx int,
-	layerFS []fs.FS,
+	sourceLayers []migrationSourceLayer,
 ) ([]migrate.Migration, map[string]OrderedMigrationMetadata, error) {
 	entries := make(map[string]*orderedSourceEntry)
 
-	for layerIdx, currentFS := range layerFS {
-		discovered, err := discoverLayerMigrations(currentFS)
+	for layerIdx, layer := range sourceLayers {
+		discovered, err := discoverLayerMigrations(layer.fsys)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -112,7 +112,7 @@ func compileOrderedSourceMigrations(
 		layerSeen := make(map[orderedLayerIdentity]string)
 		layerComments := make(map[string]string)
 
-		err = fs.WalkDir(currentFS, ".", func(path string, d fs.DirEntry, walkErr error) error {
+		err = fs.WalkDir(layer.fsys, ".", func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
@@ -168,14 +168,14 @@ func compileOrderedSourceMigrations(
 				}
 				migrationFunc := layerMigration.Up
 				entry.migration.Up = migrationFunc
-				entry.upPath = path
+				entry.upPath = qualifyLayerPath(layer.pathPrefix, path)
 			case orderedDirectionDown:
 				if layerMigration.Down == nil {
 					return fmt.Errorf("missing down migration function in source %q for version %q and path %q", sourceName, version, path)
 				}
 				migrationFunc := layerMigration.Down
 				entry.migration.Down = migrationFunc
-				entry.downPath = path
+				entry.downPath = qualifyLayerPath(layer.pathPrefix, path)
 			}
 
 			if !entry.commentLayerSet || layerIdx >= entry.commentLayer {
