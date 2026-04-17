@@ -24,9 +24,12 @@ type DriverConfig interface {
 type Migrations struct {
 	mx                   sync.Mutex
 	Files                []fs.FS // For SQL files
+	sqlSourceNames       []string
 	dialectRegistrations []dialectRegistration
 	orderedRegistrations []orderedSourceRegistration
 	orderedMetadata      map[string]OrderedMigrationMetadata
+	lastPlan             *MigrationPlan
+	planEntries          map[string]MigrationPlanEntry
 	migrations           *migrate.MigrationGroup
 	lgr                  Logger
 }
@@ -34,9 +37,11 @@ type Migrations struct {
 func NewMigrations() *Migrations {
 	m := &Migrations{
 		Files:                make([]fs.FS, 0),
+		sqlSourceNames:       make([]string, 0),
 		dialectRegistrations: make([]dialectRegistration, 0),
 		orderedRegistrations: make([]orderedSourceRegistration, 0),
 		orderedMetadata:      make(map[string]OrderedMigrationMetadata),
+		planEntries:          make(map[string]MigrationPlanEntry),
 		lgr:                  &defaultLogger{},
 	}
 	return m
@@ -62,67 +67,25 @@ func (m *Migrations) logger() Logger {
 // for the scneario of importing migrations from a different project that might need
 // to be run before others but have a naming that would put them after
 func (m *Migrations) initSQLMigrations(ctx context.Context, db *bun.DB) (*migrate.Migrations, error) {
-	m.mx.Lock()
-	files := append([]fs.FS(nil), m.Files...)
-	dialectRegistrations := append([]dialectRegistration(nil), m.dialectRegistrations...)
-	orderedRegistrations := append([]orderedSourceRegistration(nil), m.orderedRegistrations...)
-	m.mx.Unlock()
-
-	if len(files) == 0 && len(dialectRegistrations) == 0 && len(orderedRegistrations) == 0 {
-		return nil, nil // Nothing to do
-	}
-
-	migrations := migrate.NewMigrations()
-	for i, migrationFS := range files {
-		if err := migrations.Discover(migrationFS); err != nil {
-			return nil, apierrors.Wrap(err,
-				apierrors.CategoryInternal,
-				"failed to discover filesystem migrations",
-			).WithMetadata(map[string]any{"index": i})
-		}
-	}
-
-	for i, registration := range dialectRegistrations {
-		buildResult, err := registration.buildFileSystems(ctx, db)
-		if err != nil {
-			return nil, apierrors.Wrap(err,
-				apierrors.CategoryInternal,
-				"failed to prepare dialect-specific migrations",
-			).WithMetadata(map[string]any{"index": i})
-		}
-		for j, migrationFS := range buildResult.fileSystems {
-			if err := migrations.Discover(migrationFS); err != nil {
-				return nil, apierrors.Wrap(err,
-					apierrors.CategoryInternal,
-					"failed to discover dialect filesystem migrations",
-				).WithMetadata(map[string]any{"index": j, "dialect_registration": i})
-			}
-		}
-	}
-
-	orderedMigrations, orderedMetadata, err := buildOrderedMigrations(ctx, db, orderedRegistrations)
+	resolved, err := m.resolvePlan(ctx, db, nil)
 	if err != nil {
 		return nil, err
 	}
-	for _, migration := range orderedMigrations {
-		migrations.Add(migration)
-	}
 
-	m.mx.Lock()
-	m.orderedMetadata = orderedMetadata
-	m.mx.Unlock()
-
-	if len(migrations.Sorted()) == 0 {
+	m.cacheResolvedPlan(resolved)
+	if resolved.migrations == nil || len(resolved.migrations.Sorted()) == 0 {
 		return nil, nil
 	}
-
-	return migrations, nil
+	return resolved.migrations, nil
 }
 
 // RegisterSQLMigrations adds SQL based migrations
 func (m *Migrations) RegisterSQLMigrations(migrations ...fs.FS) *Migrations {
 	m.mx.Lock()
-	m.Files = append(m.Files, migrations...)
+	for _, migrationFS := range migrations {
+		m.Files = append(m.Files, migrationFS)
+		m.sqlSourceNames = append(m.sqlSourceNames, defaultSQLSourceName(len(m.sqlSourceNames)))
+	}
 	m.mx.Unlock()
 	return m
 }
@@ -143,8 +106,9 @@ func (m *Migrations) RegisterDialectMigrations(root fs.FS, opts ...DialectMigrat
 
 	m.mx.Lock()
 	m.dialectRegistrations = append(m.dialectRegistrations, dialectRegistration{
-		root: root,
-		opts: config,
+		root:       root,
+		opts:       config,
+		sourceName: defaultDialectSourceName(len(m.dialectRegistrations)),
 	})
 	m.mx.Unlock()
 
@@ -157,6 +121,14 @@ func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigration
 	defer m.mx.Unlock()
 
 	seen := make(map[string]struct{}, len(m.orderedRegistrations)+len(sources))
+	for _, existing := range m.sqlSourceNames {
+		seen[existing] = struct{}{}
+	}
+	for _, existing := range m.dialectRegistrations {
+		if existing.sourceName != "" {
+			seen[existing.sourceName] = struct{}{}
+		}
+	}
 	for _, existing := range m.orderedRegistrations {
 		seen[existing.name] = struct{}{}
 	}
@@ -186,7 +158,8 @@ func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigration
 		}
 
 		m.orderedRegistrations = append(m.orderedRegistrations, orderedSourceRegistration{
-			name: name,
+			name:     name,
+			sequence: len(m.orderedRegistrations),
 			registration: dialectRegistration{
 				root: source.Root,
 				opts: opts,
@@ -199,6 +172,14 @@ func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigration
 
 // ValidateDialects executes configured dialect validation callbacks.
 func (m *Migrations) ValidateDialects(ctx context.Context, db *bun.DB) error {
+	return m.validateDialects(ctx, db, nil)
+}
+
+func (m *Migrations) validateDialects(
+	ctx context.Context,
+	db *bun.DB,
+	selected map[string]struct{},
+) error {
 	m.mx.Lock()
 	registrations := make([]dialectRegistration, len(m.dialectRegistrations))
 	copy(registrations, m.dialectRegistrations)
@@ -206,11 +187,21 @@ func (m *Migrations) ValidateDialects(ctx context.Context, db *bun.DB) error {
 	m.mx.Unlock()
 
 	for idx, registration := range registrations {
+		if len(selected) > 0 {
+			if _, ok := selected[registration.sourceName]; !ok {
+				continue
+			}
+		}
 		if err := registration.validate(ctx, db, idx); err != nil {
 			return err
 		}
 	}
 	for idx, registration := range orderedRegistrations {
+		if len(selected) > 0 {
+			if _, ok := selected[registration.name]; !ok {
+				continue
+			}
+		}
 		if err := registration.registration.validate(ctx, db, idx); err != nil {
 			return err
 		}
@@ -219,7 +210,12 @@ func (m *Migrations) ValidateDialects(ctx context.Context, db *bun.DB) error {
 }
 
 // run is a helper to execute migrations for a given collection
-func (m *Migrations) run(ctx context.Context, db *bun.DB, migrations *migrate.Migrations) (*migrate.MigrationGroup, error) {
+func (m *Migrations) run(
+	ctx context.Context,
+	db *bun.DB,
+	migrations *migrate.Migrations,
+	entries map[string]MigrationPlanEntry,
+) (*migrate.MigrationGroup, error) {
 	migrator := migrate.NewMigrator(db, migrations)
 	if err := migrator.Init(ctx); err != nil {
 		return nil, apierrors.Wrap(err, apierrors.CategoryOperation, "failed to initialize migrator")
@@ -230,14 +226,14 @@ func (m *Migrations) run(ctx context.Context, db *bun.DB, migrations *migrate.Mi
 		if strings.Contains(err.Error(), "no new migrations") {
 			return nil, nil // not an error, just nothing to do
 		}
-		return nil, apierrors.Wrap(err, apierrors.CategoryOperation, "failed to run migrations")
+		return nil, apierrors.Wrap(wrapMigrationExecutionError(err, entries), apierrors.CategoryOperation, "failed to run migrations")
 	}
 
 	if group.IsZero() {
 		m.logger().Debug("migrations: no new migrations were applied in this group")
 	} else {
 		m.logger().Debug("migrations: successfully applied migration group", "group", group.String())
-		m.logOrderedGroup(group.Migrations)
+		m.logMigrationGroup(group.Migrations)
 	}
 
 	return group, nil
@@ -245,22 +241,48 @@ func (m *Migrations) run(ctx context.Context, db *bun.DB, migrations *migrate.Mi
 
 // Migrate runs SQL file-based migrations discovered from registered filesystems.
 func (m *Migrations) Migrate(ctx context.Context, db *bun.DB) error {
+	return m.migrateWithSourceSelection(ctx, db, nil)
+}
+
+// MigrateSources runs migrations for a selected subset of registered sources.
+func (m *Migrations) MigrateSources(
+	ctx context.Context,
+	db *bun.DB,
+	sourceNames ...string,
+) error {
+	if len(sourceNames) == 0 {
+		return fmt.Errorf("at least one source name is required")
+	}
+	return m.migrateWithSourceSelection(ctx, db, sourceNames)
+}
+
+func (m *Migrations) migrateWithSourceSelection(
+	ctx context.Context,
+	db *bun.DB,
+	sourceNames []string,
+) error {
 	// Only run SQL migrations if that's all you have
 	m.logger().Debug("migrations: running SQL file-based migrations...")
 
-	if m.shouldValidateDialectsOnMigrate() {
-		if err := m.ValidateDialects(ctx, db); err != nil {
+	selected := make(map[string]struct{}, len(sourceNames))
+	for _, name := range sourceNames {
+		selected[name] = struct{}{}
+	}
+
+	if m.shouldValidateDialectsOnMigrate(selected) {
+		if err := m.validateDialects(ctx, db, selected); err != nil {
 			return err
 		}
 	}
 
-	sqlMigrations, err := m.initSQLMigrations(ctx, db)
+	resolved, err := m.resolvePlan(ctx, db, sourceNames)
 	if err != nil {
 		return err
 	}
+	m.cacheResolvedPlan(resolved)
 
-	if sqlMigrations != nil && len(sqlMigrations.Sorted()) > 0 {
-		sqlMigrationsGroup, err := m.run(ctx, db, sqlMigrations)
+	if resolved.migrations != nil && len(resolved.migrations.Sorted()) > 0 {
+		sqlMigrationsGroup, err := m.run(ctx, db, resolved.migrations, resolved.entryByName)
 		if err != nil {
 			return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to run SQL migrations")
 		}
@@ -305,7 +327,7 @@ func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.M
 	m.migrations = group
 	if group != nil && !group.IsZero() {
 		m.logger().Debug("migrations: successfully rolled back migration group", "group", group.String())
-		m.logOrderedGroup(group.Migrations)
+		m.logMigrationGroup(group.Migrations)
 	}
 
 	return nil
@@ -343,7 +365,7 @@ func (m *Migrations) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrat
 		}
 		lastGroup = group
 		m.logger().Debug("migrations: rolled back group", "group", group.String())
-		m.logOrderedGroup(group.Migrations)
+		m.logMigrationGroup(group.Migrations)
 	}
 
 	m.migrations = lastGroup
@@ -357,13 +379,13 @@ func (m *Migrations) Report() *migrate.MigrationGroup {
 	return m.migrations
 }
 
-func (m *Migrations) logOrderedGroup(migrations migrate.MigrationSlice) {
+func (m *Migrations) logMigrationGroup(migrations migrate.MigrationSlice) {
 	if len(migrations) == 0 {
 		return
 	}
 	m.mx.Lock()
-	metadata := make(map[string]OrderedMigrationMetadata, len(m.orderedMetadata))
-	for k, v := range m.orderedMetadata {
+	metadata := make(map[string]MigrationPlanEntry, len(m.planEntries))
+	for k, v := range m.planEntries {
 		metadata[k] = v
 	}
 	m.mx.Unlock()
@@ -373,31 +395,109 @@ func (m *Migrations) logOrderedGroup(migrations migrate.MigrationSlice) {
 			continue
 		}
 		m.logger().Debug(
-			"migrations: ordered source migration",
+			"migrations: source migration",
 			"synthetic", migration.Name,
 			"source", meta.SourceName,
+			"kind", meta.SourceKind,
 			"version", meta.OriginalVersion,
+			"comment", meta.OriginalComment,
 			"up", meta.UpPath,
 			"down", meta.DownPath,
 		)
 	}
 }
 
-func (m *Migrations) shouldValidateDialectsOnMigrate() bool {
+func (m *Migrations) shouldValidateDialectsOnMigrate(selected map[string]struct{}) bool {
 	m.mx.Lock()
 	dialectRegistrations := append([]dialectRegistration(nil), m.dialectRegistrations...)
 	orderedRegistrations := append([]orderedSourceRegistration(nil), m.orderedRegistrations...)
 	m.mx.Unlock()
 
 	for _, registration := range dialectRegistrations {
+		if len(selected) > 0 {
+			if _, ok := selected[registration.sourceName]; !ok {
+				continue
+			}
+		}
 		if registration.opts.validateOnMigrate {
 			return true
 		}
 	}
 	for _, registration := range orderedRegistrations {
+		if len(selected) > 0 {
+			if _, ok := selected[registration.name]; !ok {
+				continue
+			}
+		}
 		if registration.registration.opts.validateOnMigrate {
 			return true
 		}
 	}
 	return false
+}
+
+func (m *Migrations) cacheResolvedPlan(resolved *resolvedMigrationPlan) {
+	if resolved == nil {
+		return
+	}
+
+	planEntries := make(map[string]MigrationPlanEntry, len(resolved.entryByName))
+	orderedMetadata := make(map[string]OrderedMigrationMetadata)
+	for name, entry := range resolved.entryByName {
+		planEntries[name] = entry
+		if entry.SourceKind != MigrationSourceKindOrdered {
+			continue
+		}
+		orderedMetadata[name] = OrderedMigrationMetadata{
+			SyntheticName:   entry.SyntheticName,
+			SourceName:      entry.SourceName,
+			OriginalVersion: entry.OriginalVersion,
+			OriginalComment: entry.OriginalComment,
+			UpPath:          entry.UpPath,
+			DownPath:        entry.DownPath,
+		}
+	}
+
+	m.mx.Lock()
+	m.lastPlan = cloneMigrationPlan(resolved.plan)
+	m.planEntries = planEntries
+	m.orderedMetadata = orderedMetadata
+	m.mx.Unlock()
+}
+
+func wrapMigrationExecutionError(err error, entries map[string]MigrationPlanEntry) error {
+	if err == nil {
+		return nil
+	}
+
+	name := migrationNameFromError(err)
+	if name == "" {
+		return err
+	}
+	entry, ok := entries[name]
+	if !ok {
+		return err
+	}
+
+	return fmt.Errorf(
+		"migration %q from source %q (%s_%s): %w",
+		entry.SyntheticName,
+		entry.SourceName,
+		entry.OriginalVersion,
+		entry.OriginalComment,
+		err,
+	)
+}
+
+func migrationNameFromError(err error) string {
+	if err == nil {
+		return ""
+	}
+	value := err.Error()
+	for _, marker := range []string{": up:", ": down:"} {
+		if idx := strings.Index(value, marker); idx > 0 {
+			return value[:idx]
+		}
+	}
+	return ""
 }
