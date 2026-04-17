@@ -575,6 +575,140 @@ func TestOrderedMigrations_DialectAwareLoading(t *testing.T) {
 	}, sequence)
 }
 
+func TestMigrations_PlanIncludesResolvedMetadataAcrossSources(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+
+	plainFS := fstest.MapFS{
+		"0001_users.up.sql":   {Data: []byte("CREATE TABLE plan_plain_users(id INTEGER);")},
+		"0001_users.down.sql": {Data: []byte("DROP TABLE plan_plain_users;")},
+	}
+	dialectFS := fstest.MapFS{
+		"sqlite/0002_traits.up.sql":   {Data: []byte("CREATE TABLE plan_dialect_traits(id INTEGER);")},
+		"sqlite/0002_traits.down.sql": {Data: []byte("DROP TABLE plan_dialect_traits;")},
+	}
+	orderedFS := fstest.MapFS{
+		"0003_roles.up.sql":   {Data: []byte("CREATE TABLE plan_ordered_roles(id INTEGER);")},
+		"0003_roles.down.sql": {Data: []byte("DROP TABLE plan_ordered_roles;")},
+	}
+
+	m.RegisterSQLMigrations(plainFS)
+	m.RegisterDialectMigrations(
+		dialectFS,
+		WithDialectName("sqlite"),
+		WithDialectSourceLabel("catalog"),
+	)
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: orderedFS},
+	))
+
+	plan, err := m.Plan(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"sql[1]", "dialect[1]", "go-auth"}, plan.SelectedSources)
+	require.Len(t, plan.Entries, 3)
+
+	plain := planEntryBySourceAndVersion(t, plan, "sql[1]", "0001")
+	assert.Equal(t, "0001", plain.SyntheticName)
+	assert.Equal(t, MigrationSourceKindSQL, plain.SourceKind)
+	assert.Equal(t, "users", plain.OriginalComment)
+	assert.Equal(t, "0001_users.up.sql", plain.UpPath)
+	assert.Equal(t, "0001_users.down.sql", plain.DownPath)
+	assert.Equal(t, 1, plain.ExecutionOrder)
+	assert.Empty(t, plain.Dialect)
+
+	dialect := planEntryBySourceAndVersion(t, plan, "dialect[1]", "0002")
+	assert.Equal(t, "0002", dialect.SyntheticName)
+	assert.Equal(t, MigrationSourceKindDialect, dialect.SourceKind)
+	assert.Equal(t, "catalog", dialect.SourceLabel)
+	assert.Equal(t, "traits", dialect.OriginalComment)
+	assert.Equal(t, "0002_traits.up.sql", dialect.UpPath)
+	assert.Equal(t, "0002_traits.down.sql", dialect.DownPath)
+	assert.Equal(t, 2, dialect.ExecutionOrder)
+	assert.Equal(t, "sqlite", dialect.Dialect)
+
+	ordered := planEntryBySourceAndVersion(t, plan, "go-auth", "0003")
+	assert.Equal(t, "ord_000001_000001", ordered.SyntheticName)
+	assert.Equal(t, MigrationSourceKindOrdered, ordered.SourceKind)
+	assert.Equal(t, "roles", ordered.OriginalComment)
+	assert.Equal(t, "0003_roles.up.sql", ordered.UpPath)
+	assert.Equal(t, "0003_roles.down.sql", ordered.DownPath)
+	assert.Equal(t, 3, ordered.ExecutionOrder)
+
+	require.Equal(t, plan, m.LastPlan())
+}
+
+func TestMigrations_PlanSourcesAllowsSafeSubsetWhenFullPlanIsAmbiguous(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+
+	m.RegisterSQLMigrations(
+		fstest.MapFS{
+			"0001_alpha.up.sql":   {Data: []byte("CREATE TABLE alpha(id INTEGER);")},
+			"0001_alpha.down.sql": {Data: []byte("DROP TABLE alpha;")},
+		},
+		fstest.MapFS{
+			"0001_beta.up.sql":   {Data: []byte("CREATE TABLE beta(id INTEGER);")},
+			"0001_beta.down.sql": {Data: []byte("DROP TABLE beta;")},
+		},
+	)
+
+	_, err := m.Plan(ctx, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ambiguous migration composition")
+
+	plan, err := m.PlanSources(ctx, nil, "sql[1]")
+	require.NoError(t, err)
+	require.Equal(t, []string{"sql[1]"}, plan.SelectedSources)
+	require.Len(t, plan.Entries, 1)
+	assert.Equal(t, "sql[1]", plan.Entries[0].SourceName)
+	assert.Equal(t, "alpha", plan.Entries[0].OriginalComment)
+}
+
+func TestMigrations_MigrateSourcesOnlyRunsSelectedSource(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	m := NewMigrations()
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-auth",
+			Root: fstest.MapFS{
+				"0001_auth.up.sql":   {Data: []byte("CREATE TABLE auth_users (id INTEGER PRIMARY KEY);")},
+				"0001_auth.down.sql": {Data: []byte("DROP TABLE auth_users;")},
+			},
+		},
+		OrderedMigrationSource{
+			Name: "go-users",
+			Root: fstest.MapFS{
+				"0001_users.up.sql":   {Data: []byte("CREATE TABLE users (id INTEGER PRIMARY KEY);")},
+				"0001_users.down.sql": {Data: []byte("DROP TABLE users;")},
+			},
+		},
+	))
+
+	require.NoError(t, m.MigrateSources(ctx, db, "go-auth"))
+	assert.True(t, sqliteTableExists(t, db, "auth_users"))
+	assert.False(t, sqliteTableExists(t, db, "users"))
+
+	plan, err := m.Plan(ctx, db)
+	require.NoError(t, err)
+	auth := planEntryBySourceAndVersion(t, plan, "go-auth", "0001")
+	users := planEntryBySourceAndVersion(t, plan, "go-users", "0001")
+	assert.True(t, auth.Applied)
+	assert.False(t, users.Applied)
+
+	require.NoError(t, m.MigrateSources(ctx, db, "go-users"))
+	assert.True(t, sqliteTableExists(t, db, "users"))
+
+	plan, err = m.Plan(ctx, db)
+	require.NoError(t, err)
+	auth = planEntryBySourceAndVersion(t, plan, "go-auth", "0001")
+	users = planEntryBySourceAndVersion(t, plan, "go-users", "0001")
+	assert.True(t, auth.Applied)
+	assert.True(t, users.Applied)
+}
+
 func TestValidateDialectsIncludesOrderedSources(t *testing.T) {
 	ctx := context.Background()
 	m := NewMigrations()
@@ -933,4 +1067,31 @@ func reverseStrings(values []string) []string {
 		values[left], values[right] = values[right], values[left]
 	}
 	return values
+}
+
+func planEntryBySourceAndVersion(t *testing.T, plan *MigrationPlan, sourceName, version string) MigrationPlanEntry {
+	t.Helper()
+
+	for _, entry := range plan.Entries {
+		if entry.SourceName == sourceName && entry.OriginalVersion == version {
+			return entry
+		}
+	}
+
+	require.FailNowf(t, "missing plan entry", "source=%s version=%s", sourceName, version)
+	return MigrationPlanEntry{}
+}
+
+func sqliteTableExists(t *testing.T, db *bun.DB, tableName string) bool {
+	t.Helper()
+
+	var count int
+	err := db.NewSelect().
+		TableExpr("sqlite_master").
+		ColumnExpr("COUNT(*)").
+		Where("type = 'table'").
+		Where("name = ?", tableName).
+		Scan(context.Background(), &count)
+	require.NoError(t, err)
+	return count > 0
 }
