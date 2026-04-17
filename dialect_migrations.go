@@ -85,8 +85,9 @@ type dialectOptions struct {
 }
 
 type dialectRegistration struct {
-	root fs.FS
-	opts dialectOptions
+	root       fs.FS
+	opts       dialectOptions
+	sourceName string
 }
 
 type dialectBuildResult struct {
