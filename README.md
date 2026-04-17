@@ -313,6 +313,10 @@ users:
 #### Migrations
 
 - `Migrate(ctx context.Context) error`: Run pending migrations
+- `MigrateSources(ctx context.Context, sourceNames ...string) error`: Run pending migrations for a selected source subset
+- `Plan(ctx context.Context) (*MigrationPlan, error)`: Resolve the current execution plan for all registered sources
+- `PlanSources(ctx context.Context, sourceNames ...string) (*MigrationPlan, error)`: Resolve the plan for a selected source subset
+- `LastPlan() *MigrationPlan`: Return the last resolved migration plan
 - `RegisterSQLMigrations(migrations ...fs.FS) *Migrations`: Register SQL migrations
 - `RegisterOrderedMigrationSources(sources ...OrderedMigrationSource) error`: Register ordered, source-aware SQL migration sources
 - `GetMigrations() *Migrations`: Get migrations manager
