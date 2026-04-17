@@ -4,17 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"path/filepath"
-	"regexp"
 	"sort"
-	"strings"
 
 	apierrors "github.com/goliatone/go-errors"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/migrate"
 )
-
-var orderedMigrationNameRE = regexp.MustCompile(`^(\d{1,14})_([0-9a-z_\-]+)\.`)
 
 // OrderedMigrationSource defines one named migration source in an explicit order.
 type OrderedMigrationSource struct {
@@ -36,6 +31,7 @@ type OrderedMigrationMetadata struct {
 
 type orderedSourceRegistration struct {
 	name         string
+	sequence     int
 	registration dialectRegistration
 }
 
@@ -74,21 +70,21 @@ func buildOrderedMigrations(
 	out := make([]migrate.Migration, 0)
 	metadata := make(map[string]OrderedMigrationMetadata)
 
-	for sourceIdx, source := range registrations {
+	for _, source := range registrations {
 		buildResult, err := source.registration.buildFileSystems(ctx, db)
 		if err != nil {
 			return nil, nil, apierrors.Wrap(err,
 				apierrors.CategoryInternal,
 				"failed to prepare ordered source dialect migrations",
-			).WithMetadata(map[string]any{"source_index": sourceIdx, "source_name": source.name})
+			).WithMetadata(map[string]any{"source_index": source.sequence, "source_name": source.name})
 		}
 
-		sourceMigrations, sourceMeta, err := compileOrderedSourceMigrations(source.name, sourceIdx, buildResult.fileSystems)
+		sourceMigrations, sourceMeta, err := compileOrderedSourceMigrations(source.name, source.sequence, buildResult.fileSystems)
 		if err != nil {
 			return nil, nil, apierrors.Wrap(err,
 				apierrors.CategoryInternal,
 				"failed to compile ordered source migrations",
-			).WithMetadata(map[string]any{"source_index": sourceIdx, "source_name": source.name})
+			).WithMetadata(map[string]any{"source_index": source.sequence, "source_name": source.name})
 		}
 
 		out = append(out, sourceMigrations...)
@@ -243,23 +239,7 @@ func discoverLayerMigrations(layer fs.FS) (map[string]migrate.Migration, error) 
 }
 
 func parseOrderedMigrationFile(path string) (string, string, orderedDirection, bool, error) {
-	base := strings.ToLower(filepath.Base(path))
-
-	direction := orderedDirectionUnknown
-	if strings.HasSuffix(base, ".up.sql") {
-		direction = orderedDirectionUp
-	} else if strings.HasSuffix(base, ".down.sql") {
-		direction = orderedDirectionDown
-	} else {
-		return "", "", orderedDirectionUnknown, false, nil
-	}
-
-	matches := orderedMigrationNameRE.FindStringSubmatch(base)
-	if matches == nil {
-		return "", "", orderedDirectionUnknown, false, fmt.Errorf("unsupported migration name format: %q", filepath.Base(path))
-	}
-
-	return matches[1], matches[2], direction, true, nil
+	return parseSQLMigrationFile(path)
 }
 
 func orderedSyntheticMigrationName(sourceIdx, migrationIdx int) string {
