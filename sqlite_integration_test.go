@@ -113,8 +113,8 @@ func TestRunInTx_SQLiteParentChildrenAndRollback(t *testing.T) {
 			},
 		}
 
-		if _, err := tx.NewInsert().Model(run).Exec(ctx); err != nil {
-			return err
+		if _, execErr := tx.NewInsert().Model(run).Exec(ctx); execErr != nil {
+			return execErr
 		}
 		successfulRunID = run.ID
 		if successfulRunID == 0 {
@@ -170,8 +170,8 @@ func TestRunInTx_SQLiteParentChildrenAndRollback(t *testing.T) {
 			Status:     "running",
 		}
 
-		if _, err := tx.NewInsert().Model(run).Exec(ctx); err != nil {
-			return err
+		if _, execErr := tx.NewInsert().Model(run).Exec(ctx); execErr != nil {
+			return execErr
 		}
 		runID := run.ID
 		if runID == 0 {
@@ -185,8 +185,8 @@ func TestRunInTx_SQLiteParentChildrenAndRollback(t *testing.T) {
 			Message:   "simulated failure",
 			Status:    "open",
 		}
-		if _, err := tx.NewInsert().Model(issue).Exec(ctx); err != nil {
-			return err
+		if _, execErr := tx.NewInsert().Model(issue).Exec(ctx); execErr != nil {
+			return execErr
 		}
 
 		return expectedErr
@@ -228,12 +228,12 @@ func TestRunInTx_SQLiteConcurrencySanity(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			err := RunInTx(ctx, db, func(ctx context.Context, tx bun.Tx) error {
+			txErr := RunInTx(ctx, db, func(ctx context.Context, tx bun.Tx) error {
 				record := &concurrencyRecord{
 					Worker: "worker",
 				}
-				if _, err := tx.NewInsert().Model(record).Exec(ctx); err != nil {
-					return err
+				if _, execErr := tx.NewInsert().Model(record).Exec(ctx); execErr != nil {
+					return execErr
 				}
 
 				if workerID%5 == 0 {
@@ -242,11 +242,11 @@ func TestRunInTx_SQLiteConcurrencySanity(t *testing.T) {
 				return nil
 			})
 
-			if err != nil {
-				if errors.Is(err, rollbackErr) {
+			if txErr != nil {
+				if errors.Is(txErr, rollbackErr) {
 					return
 				}
-				errCh <- err
+				errCh <- txErr
 				return
 			}
 			committed.Add(1)

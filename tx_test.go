@@ -15,7 +15,9 @@ import (
 func TestRunInTx_CommitsOnSuccess(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer sqlDB.Close()
+	defer func() {
+		_ = sqlDB.Close()
+	}()
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT 1").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -24,8 +26,8 @@ func TestRunInTx_CommitsOnSuccess(t *testing.T) {
 	db := bun.NewDB(sqlDB, pgdialect.New())
 
 	err = RunInTx(context.Background(), db, func(ctx context.Context, tx bun.Tx) error {
-		_, err := tx.NewRaw("SELECT 1").Exec(ctx)
-		return err
+		_, execErr := tx.NewRaw("SELECT 1").Exec(ctx)
+		return execErr
 	})
 
 	require.NoError(t, err)
@@ -35,7 +37,9 @@ func TestRunInTx_CommitsOnSuccess(t *testing.T) {
 func TestRunInTx_RollsBackOnError(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer sqlDB.Close()
+	defer func() {
+		_ = sqlDB.Close()
+	}()
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT 1").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -58,7 +62,9 @@ func TestRunInTx_RollsBackOnError(t *testing.T) {
 func TestRunInTx_RollsBackOnPanic(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer sqlDB.Close()
+	defer func() {
+		_ = sqlDB.Close()
+	}()
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT 1").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -79,7 +85,9 @@ func TestRunInTx_RollsBackOnPanic(t *testing.T) {
 func TestRunInTx_ExistingTxAvoidsNestedBegin(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer sqlDB.Close()
+	defer func() {
+		_ = sqlDB.Close()
+	}()
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT 1").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -91,8 +99,8 @@ func TestRunInTx_ExistingTxAvoidsNestedBegin(t *testing.T) {
 	require.NoError(t, err)
 
 	err = RunInTx(context.Background(), tx, func(ctx context.Context, activeTx bun.Tx) error {
-		_, err := activeTx.NewRaw("SELECT 1").Exec(ctx)
-		return err
+		_, execErr := activeTx.NewRaw("SELECT 1").Exec(ctx)
+		return execErr
 	})
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
@@ -107,7 +115,9 @@ func TestRunInTx_ValidatesInput(t *testing.T) {
 
 	sqlDB, _, openErr := sqlmock.New()
 	require.NoError(t, openErr)
-	defer sqlDB.Close()
+	defer func() {
+		_ = sqlDB.Close()
+	}()
 	db := bun.NewDB(sqlDB, pgdialect.New())
 
 	err = RunInTx(context.Background(), db, nil)

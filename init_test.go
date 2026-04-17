@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-
 	"io/fs"
 	"testing"
 	"testing/fstest"
@@ -60,7 +59,9 @@ func TestNew(t *testing.T) {
 	// Create a mock DB with driver
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	assert.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	defer resetInit()
 
 	// Setup mock expectations
@@ -140,7 +141,9 @@ func TestClient(t *testing.T) {
 
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	assert.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	mock.ExpectPing()
 
@@ -176,16 +179,6 @@ func TestClient(t *testing.T) {
 	})
 
 	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-type mockFS struct {
-	mock.Mock
-	fs.FS
-}
-
-func (m *mockFS) Open(name string) (fs.File, error) {
-	args := m.Called(name)
-	return args.Get(0).(fs.File), args.Error(1)
 }
 
 func TestFixturesLoad(t *testing.T) {

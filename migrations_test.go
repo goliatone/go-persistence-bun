@@ -929,7 +929,9 @@ func TestMigrations_initSQLMigrations_WithFiles(t *testing.T) {
 func TestMigrations_Migrate_NoMigrations(t *testing.T) {
 	db, _, err := sqlmock.New()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	bunDB := bun.NewDB(db, pgdialect.New())
 
@@ -962,7 +964,9 @@ func TestMigrations_Report(t *testing.T) {
 func TestMigrations_Migrate_WithSQLMigrations(t *testing.T) {
 	db, sqlMock, err := sqlmock.New()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	// Expect migration table initialization
 	sqlMock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -985,7 +989,7 @@ func TestMigrations_Migrate_WithSQLMigrations(t *testing.T) {
 	mockLogger.On("Debug", mock.Anything, mock.Anything).Return().Maybe()
 	m.SetLogger(mockLogger)
 
-	err = m.Migrate(context.Background(), bunDB)
+	_ = m.Migrate(context.Background(), bunDB)
 
 	// Note: This test will fail with actual BUN migration logic
 	// as it requires a real database connection. This is more of a
@@ -996,7 +1000,9 @@ func TestMigrations_Migrate_WithSQLMigrations(t *testing.T) {
 func TestMigrations_Rollback_NoMigrations(t *testing.T) {
 	db, sqlMock, err := sqlmock.New()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	bunDB := bun.NewDB(db, pgdialect.New())
 
@@ -1019,7 +1025,9 @@ func TestMigrations_Rollback_NoMigrations(t *testing.T) {
 func TestMigrations_RollbackAll(t *testing.T) {
 	db, sqlMock, err := sqlmock.New()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	bunDB := bun.NewDB(db, pgdialect.New())
 
@@ -1042,7 +1050,9 @@ func TestMigrations_RollbackAll(t *testing.T) {
 func TestMigrations_Rollback_WithMigrations(t *testing.T) {
 	db, sqlMock, err := sqlmock.New()
 	assert.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	// Register a migration file
 	fs := fstest.MapFS{

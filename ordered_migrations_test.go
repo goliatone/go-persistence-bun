@@ -102,7 +102,9 @@ func TestCompileOrderedSourceMigrations_MigrationExecutionWiring(t *testing.T) {
 
 	db, mockDB, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	mockDB.ExpectExec("CREATE TABLE override_alpha").WillReturnResult(sqlmock.NewResult(0, 0))
 	mockDB.ExpectExec("DROP TABLE base_alpha").WillReturnResult(sqlmock.NewResult(0, 0))
