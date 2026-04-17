@@ -1,5 +1,30 @@
 # Changelog
 
+# [0.14.0](https://github.com/goliatone/go-persistence-bun/compare/v0.13.1...v0.14.0) - (2026-04-17)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Rollback behavior ([c23c687](https://github.com/goliatone/go-persistence-bun/commit/c23c68737d0c9552feb95e184712ce1553f06d9c))  - (goliatone)
+- Preserve layer path ([9e881b4](https://github.com/goliatone/go-persistence-bun/commit/9e881b4c9715ec0c56c2ca3c0efc50099a4ad33b))  - (goliatone)
+- Preserve layer paths in plan/meta ([14e12f1](https://github.com/goliatone/go-persistence-bun/commit/14e12f1c45e8ee2bf9747f96626a154acd38b017))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.14.0 ([41063b3](https://github.com/goliatone/go-persistence-bun/commit/41063b336476465324a1b89acfeb66addfc72e70))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Migration plan to support sources ([add2103](https://github.com/goliatone/go-persistence-bun/commit/add21039f45d7d7b5a424eb6c7cd75af64859ba8))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.13.1 ([088cf96](https://github.com/goliatone/go-persistence-bun/commit/088cf96c379a2de54c2a6a6c9df82615672a7b28))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update docs ([67b21c8](https://github.com/goliatone/go-persistence-bun/commit/67b21c897b9d3c2581f8bec24ea4760c9a32375e))  - (goliatone)
+- Update tests ([0d5274e](https://github.com/goliatone/go-persistence-bun/commit/0d5274e30cd6fc560803468c2fcf86477f18326f))  - (goliatone)
+
 # [0.13.1](https://github.com/goliatone/go-persistence-bun/compare/v0.13.0...v0.13.1) - (2026-04-17)
 
 ## <!-- 1 -->🐛 Bug Fixes
