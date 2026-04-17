@@ -42,7 +42,6 @@ type Config interface {
 // Client is the persistence client
 type Client struct {
 	config            Config
-	context           context.Context
 	cancel            context.CancelFunc
 	db                *bun.DB
 	sqlDB             *sql.DB
@@ -270,9 +269,14 @@ func (c Client) MustConnect() {
 
 // Close will close the client
 func (c Client) Close() error {
-	// TODO: wrap errors
-	c.db.Close()
-	return c.sqlDB.Close()
+	var errs []error
+	if c.db != nil {
+		errs = append(errs, c.db.Close())
+	}
+	if c.sqlDB != nil {
+		errs = append(errs, c.sqlDB.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // Start will start the service
