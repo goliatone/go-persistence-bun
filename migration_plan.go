@@ -48,6 +48,11 @@ type MigrationPlanEntry struct {
 	AppliedAt       time.Time           `json:"applied_at,omitempty"`
 }
 
+type migrationSourceLayer struct {
+	fsys       fs.FS
+	pathPrefix string
+}
+
 type sourcePlanSpec struct {
 	sourceName  string
 	sourceLabel string
@@ -63,8 +68,16 @@ type resolvedMigrationPlan struct {
 	entryByName map[string]MigrationPlanEntry
 }
 
+type resolvePlanOptions struct {
+	sourceNames            []string
+	requiredMigrationNames map[string]struct{}
+	rejectSubsetConflicts  bool
+}
+
 func (m *Migrations) Plan(ctx context.Context, db *bun.DB) (*MigrationPlan, error) {
-	resolved, err := m.resolvePlan(ctx, db, nil)
+	resolved, err := m.resolvePlan(ctx, db, resolvePlanOptions{
+		rejectSubsetConflicts: true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +94,10 @@ func (m *Migrations) PlanSources(
 		return nil, fmt.Errorf("at least one source name is required")
 	}
 
-	resolved, err := m.resolvePlan(ctx, db, sourceNames)
+	resolved, err := m.resolvePlan(ctx, db, resolvePlanOptions{
+		sourceNames:           sourceNames,
+		rejectSubsetConflicts: true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -98,12 +114,50 @@ func (m *Migrations) LastPlan() *MigrationPlan {
 func (m *Migrations) resolvePlan(
 	ctx context.Context,
 	db *bun.DB,
-	sourceNames []string,
+	opts resolvePlanOptions,
 ) (*resolvedMigrationPlan, error) {
 	specs := m.sourcePlanSpecs()
-	selectedSpecs, selectedNames, err := selectSourcePlanSpecs(specs, sourceNames)
+	selectedSpecs, selectedNames, err := selectSourcePlanSpecs(specs, opts.sourceNames)
 	if err != nil {
 		return nil, err
+	}
+
+	type compiledSourcePlan struct {
+		spec     sourcePlanSpec
+		resolved *resolvedMigrationPlan
+	}
+
+	compiledPlans := make([]compiledSourcePlan, 0, len(selectedSpecs))
+	includedSources := make(map[string]struct{}, len(selectedSpecs))
+	for _, spec := range selectedSpecs {
+		compiled, err := compileSourcePlan(ctx, db, spec)
+		if err != nil {
+			return nil, err
+		}
+		compiledPlans = append(compiledPlans, compiledSourcePlan{
+			spec:     spec,
+			resolved: compiled,
+		})
+		includedSources[spec.sourceName] = struct{}{}
+	}
+
+	allSpecs := selectedSpecs
+	if len(opts.sourceNames) > 0 && (opts.rejectSubsetConflicts || len(opts.requiredMigrationNames) > 0) {
+		allSpecs = specs
+	}
+
+	nameOwners := make(map[string][]string)
+	for _, spec := range allSpecs {
+		if _, ok := includedSources[spec.sourceName]; ok {
+			continue
+		}
+		compiled, err := compileSourcePlan(ctx, db, spec)
+		if err != nil {
+			return nil, err
+		}
+		for name := range compiled.entryByName {
+			nameOwners[name] = append(nameOwners[name], spec.sourceName)
+		}
 	}
 
 	out := &resolvedMigrationPlan{
@@ -115,12 +169,18 @@ func (m *Migrations) resolvePlan(
 		entryByName: make(map[string]MigrationPlanEntry),
 	}
 
-	for _, spec := range selectedSpecs {
-		compiled, err := compileSourcePlan(ctx, db, spec)
-		if err != nil {
-			return nil, err
-		}
+	requiredFound := make(map[string]struct{}, len(opts.requiredMigrationNames))
+	for _, compiledPlan := range compiledPlans {
+		spec := compiledPlan.spec
+		compiled := compiledPlan.resolved
 		for _, migration := range compiled.migrations.Sorted() {
+			if len(opts.requiredMigrationNames) > 0 {
+				if _, ok := opts.requiredMigrationNames[migration.Name]; !ok {
+					continue
+				}
+				requiredFound[migration.Name] = struct{}{}
+			}
+
 			entry := compiled.entryByName[migration.Name]
 			if previous, exists := out.entryByName[migration.Name]; exists {
 				return nil, fmt.Errorf(
@@ -130,8 +190,37 @@ func (m *Migrations) resolvePlan(
 					entry.SourceName,
 				)
 			}
+			if opts.rejectSubsetConflicts {
+				if owners := append([]string(nil), nameOwners[migration.Name]...); len(owners) > 0 {
+					return nil, fmt.Errorf(
+						"unsafe migration source selection for %q: selected source %q conflicts with excluded source(s) %s; use RegisterOrderedMigrationSources for overlapping version trees",
+						migration.Name,
+						spec.sourceName,
+						strings.Join(owners, ", "),
+					)
+				}
+			}
+
 			out.migrations.Add(migration)
 			out.entryByName[migration.Name] = entry
+		}
+
+		for name := range compiled.entryByName {
+			nameOwners[name] = append(nameOwners[name], spec.sourceName)
+		}
+	}
+
+	if len(opts.requiredMigrationNames) > 0 {
+		missing := make([]string, 0)
+		for name := range opts.requiredMigrationNames {
+			if _, ok := requiredFound[name]; ok {
+				continue
+			}
+			missing = append(missing, name)
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return nil, fmt.Errorf("registered migrations are missing applied migration definitions for: %s", strings.Join(missing, ", "))
 		}
 	}
 
@@ -270,7 +359,7 @@ func compileSourcePlan(
 			spec.sourceLabel,
 			spec.sourceKind,
 			"",
-			[]fs.FS{spec.sqlFS},
+			[]migrationSourceLayer{{fsys: spec.sqlFS}},
 		)
 	case MigrationSourceKindDialect:
 		buildResult, err := spec.dialect.buildFileSystems(ctx, db)
@@ -282,7 +371,7 @@ func compileSourcePlan(
 			spec.sourceLabel,
 			spec.sourceKind,
 			buildResult.dialect,
-			buildResult.fileSystems,
+			buildResult.sourceLayers,
 		)
 	case MigrationSourceKindOrdered:
 		buildResult, err := spec.ordered.registration.buildFileSystems(ctx, db)
@@ -292,7 +381,7 @@ func compileSourcePlan(
 		migrations, metadata, err := compileOrderedSourceMigrations(
 			spec.ordered.name,
 			spec.ordered.sequence,
-			buildResult.fileSystems,
+			buildResult.sourceLayers,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compile ordered migration source %q: %w", spec.sourceName, err)
@@ -327,9 +416,9 @@ func compileLayeredSourcePlan(
 	sourceLabel string,
 	sourceKind MigrationSourceKind,
 	dialect string,
-	layerFS []fs.FS,
+	sourceLayers []migrationSourceLayer,
 ) (*resolvedMigrationPlan, error) {
-	migrations, entries, err := compileLayeredSourceMigrations(sourceName, layerFS)
+	migrations, entries, err := compileLayeredSourceMigrations(sourceName, sourceLayers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile migration source %q: %w", sourceName, err)
 	}
@@ -352,12 +441,12 @@ func compileLayeredSourcePlan(
 
 func compileLayeredSourceMigrations(
 	sourceName string,
-	layerFS []fs.FS,
+	sourceLayers []migrationSourceLayer,
 ) ([]migrate.Migration, map[string]MigrationPlanEntry, error) {
 	entries := make(map[string]*orderedSourceEntry)
 
-	for layerIdx, currentFS := range layerFS {
-		discovered, err := discoverLayerMigrations(currentFS)
+	for layerIdx, layer := range sourceLayers {
+		discovered, err := discoverLayerMigrations(layer.fsys)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -365,7 +454,7 @@ func compileLayeredSourceMigrations(
 		layerSeen := make(map[orderedLayerIdentity]string)
 		layerComments := make(map[string]string)
 
-		err = fs.WalkDir(currentFS, ".", func(path string, d fs.DirEntry, walkErr error) error {
+		err = fs.WalkDir(layer.fsys, ".", func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
@@ -432,13 +521,13 @@ func compileLayeredSourceMigrations(
 					return fmt.Errorf("missing up migration function in source %q for version %q and path %q", sourceName, version, path)
 				}
 				entry.migration.Up = layerMigration.Up
-				entry.upPath = path
+				entry.upPath = qualifyLayerPath(layer.pathPrefix, path)
 			case orderedDirectionDown:
 				if layerMigration.Down == nil {
 					return fmt.Errorf("missing down migration function in source %q for version %q and path %q", sourceName, version, path)
 				}
 				entry.migration.Down = layerMigration.Down
-				entry.downPath = path
+				entry.downPath = qualifyLayerPath(layer.pathPrefix, path)
 			}
 
 			if !entry.commentLayerSet || layerIdx >= entry.commentLayer {
@@ -515,6 +604,14 @@ func defaultSQLSourceName(idx int) string {
 
 func defaultDialectSourceName(idx int) string {
 	return fmt.Sprintf("dialect[%d]", idx+1)
+}
+
+func qualifyLayerPath(prefix, path string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return path
+	}
+	return filepath.Join(prefix, path)
 }
 
 func parseSQLMigrationFile(path string) (string, string, orderedDirection, bool, error) {
