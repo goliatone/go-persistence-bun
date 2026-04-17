@@ -2,7 +2,6 @@ package persistence
 
 import (
 	"context"
-	"io/fs"
 	"testing"
 	"testing/fstest"
 
@@ -27,7 +26,10 @@ func TestCompileOrderedSourceMigrations_LayeredOverrideAndMetadata(t *testing.T)
 		"nested/ignored.up.txt": {Data: []byte("ignored")},
 	}
 
-	migrations, metadata, err := compileOrderedSourceMigrations("go-auth", 0, []fs.FS{base, override})
+	migrations, metadata, err := compileOrderedSourceMigrations("go-auth", 0, []migrationSourceLayer{
+		{fsys: base},
+		{fsys: override},
+	})
 	require.NoError(t, err)
 	require.Len(t, migrations, 2)
 	require.Len(t, metadata, 2)
@@ -71,7 +73,9 @@ func TestCompileOrderedSourceMigrations_RejectDuplicateIdentity(t *testing.T) {
 		"0001_beta.up.sql":  {Data: []byte("SELECT 1;")},
 	}
 
-	_, _, err := compileOrderedSourceMigrations("go-auth", 0, []fs.FS{layer})
+	_, _, err := compileOrderedSourceMigrations("go-auth", 0, []migrationSourceLayer{
+		{fsys: layer},
+	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate migration identity")
 }
@@ -85,7 +89,10 @@ func TestCompileOrderedSourceMigrations_MigrationExecutionWiring(t *testing.T) {
 		"0001_alpha.up.sql": {Data: []byte("CREATE TABLE override_alpha;")},
 	}
 
-	compiled, _, err := compileOrderedSourceMigrations("go-auth", 0, []fs.FS{base, override})
+	compiled, _, err := compileOrderedSourceMigrations("go-auth", 0, []migrationSourceLayer{
+		{fsys: base},
+		{fsys: override},
+	})
 	require.NoError(t, err)
 	require.Len(t, compiled, 1)
 

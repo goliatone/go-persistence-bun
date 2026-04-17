@@ -575,6 +575,33 @@ func TestOrderedMigrations_DialectAwareLoading(t *testing.T) {
 	}, sequence)
 }
 
+func TestOrderedMigrations_PlanPreservesDialectLayerPaths(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+	dirFS := os.DirFS("testdata/migrations/dialect")
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-services",
+			Root: dirFS,
+			Options: []DialectMigrationOption{
+				WithDialectName("sqlite"),
+			},
+		},
+	))
+
+	plan, err := m.Plan(ctx, nil)
+	require.NoError(t, err)
+
+	common := planEntryBySourceAndVersion(t, plan, "go-services", "0000")
+	root := planEntryBySourceAndVersion(t, plan, "go-services", "0001")
+	dialect := planEntryBySourceAndVersion(t, plan, "go-services", "0002")
+
+	assert.Equal(t, "common/0000_common.up.sql", common.UpPath)
+	assert.Equal(t, "0001_widget.up.sql", root.UpPath)
+	assert.Equal(t, "sqlite/0002_traits.up.sql", dialect.UpPath)
+}
+
 func TestMigrations_PlanIncludesResolvedMetadataAcrossSources(t *testing.T) {
 	ctx := context.Background()
 	m := NewMigrations()
@@ -621,8 +648,8 @@ func TestMigrations_PlanIncludesResolvedMetadataAcrossSources(t *testing.T) {
 	assert.Equal(t, MigrationSourceKindDialect, dialect.SourceKind)
 	assert.Equal(t, "catalog", dialect.SourceLabel)
 	assert.Equal(t, "traits", dialect.OriginalComment)
-	assert.Equal(t, "0002_traits.up.sql", dialect.UpPath)
-	assert.Equal(t, "0002_traits.down.sql", dialect.DownPath)
+	assert.Equal(t, "sqlite/0002_traits.up.sql", dialect.UpPath)
+	assert.Equal(t, "sqlite/0002_traits.down.sql", dialect.DownPath)
 	assert.Equal(t, 2, dialect.ExecutionOrder)
 	assert.Equal(t, "sqlite", dialect.Dialect)
 
@@ -637,7 +664,7 @@ func TestMigrations_PlanIncludesResolvedMetadataAcrossSources(t *testing.T) {
 	require.Equal(t, plan, m.LastPlan())
 }
 
-func TestMigrations_PlanSourcesAllowsSafeSubsetWhenFullPlanIsAmbiguous(t *testing.T) {
+func TestMigrations_PlanSourcesRejectsSelectionThatCollidesWithExcludedSources(t *testing.T) {
 	ctx := context.Background()
 	m := NewMigrations()
 
@@ -656,12 +683,9 @@ func TestMigrations_PlanSourcesAllowsSafeSubsetWhenFullPlanIsAmbiguous(t *testin
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ambiguous migration composition")
 
-	plan, err := m.PlanSources(ctx, nil, "sql[1]")
-	require.NoError(t, err)
-	require.Equal(t, []string{"sql[1]"}, plan.SelectedSources)
-	require.Len(t, plan.Entries, 1)
-	assert.Equal(t, "sql[1]", plan.Entries[0].SourceName)
-	assert.Equal(t, "alpha", plan.Entries[0].OriginalComment)
+	_, err = m.PlanSources(ctx, nil, "sql[1]")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsafe migration source selection")
 }
 
 func TestMigrations_MigrateSourcesOnlyRunsSelectedSource(t *testing.T) {
@@ -707,6 +731,114 @@ func TestMigrations_MigrateSourcesOnlyRunsSelectedSource(t *testing.T) {
 	users = planEntryBySourceAndVersion(t, plan, "go-users", "0001")
 	assert.True(t, auth.Applied)
 	assert.True(t, users.Applied)
+}
+
+func TestMigrations_MigrateSourcesRejectsSelectionThatCollidesWithExcludedSources(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	m := NewMigrations()
+	m.RegisterSQLMigrations(
+		fstest.MapFS{
+			"0001_alpha.up.sql":   {Data: []byte("CREATE TABLE alpha(id INTEGER);")},
+			"0001_alpha.down.sql": {Data: []byte("DROP TABLE alpha;")},
+		},
+		fstest.MapFS{
+			"0001_beta.up.sql":   {Data: []byte("CREATE TABLE beta(id INTEGER);")},
+			"0001_beta.down.sql": {Data: []byte("DROP TABLE beta;")},
+		},
+	)
+
+	err := m.MigrateSources(ctx, db, "sql[1]")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsafe migration source selection")
+}
+
+func TestMigrations_RollbackIgnoresUnrelatedAmbiguousSources(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	m := NewMigrations()
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-auth",
+			Root: fstest.MapFS{
+				"0001_auth.up.sql":   {Data: []byte("CREATE TABLE auth_users (id INTEGER PRIMARY KEY);")},
+				"0001_auth.down.sql": {Data: []byte("DROP TABLE auth_users;")},
+			},
+		},
+		OrderedMigrationSource{
+			Name: "go-users",
+			Root: fstest.MapFS{
+				"0001_users.up.sql":   {Data: []byte("CREATE TABLE users (id INTEGER PRIMARY KEY);")},
+				"0001_users.down.sql": {Data: []byte("DROP TABLE users;")},
+			},
+		},
+	))
+
+	m.RegisterSQLMigrations(
+		fstest.MapFS{
+			"0001_alpha.up.sql":   {Data: []byte("CREATE TABLE alpha(id INTEGER);")},
+			"0001_alpha.down.sql": {Data: []byte("DROP TABLE alpha;")},
+		},
+		fstest.MapFS{
+			"0001_beta.up.sql":   {Data: []byte("CREATE TABLE beta(id INTEGER);")},
+			"0001_beta.down.sql": {Data: []byte("DROP TABLE beta;")},
+		},
+	)
+
+	require.NoError(t, m.MigrateSources(ctx, db, "go-auth"))
+	require.NoError(t, m.MigrateSources(ctx, db, "go-users"))
+	assert.True(t, sqliteTableExists(t, db, "auth_users"))
+	assert.True(t, sqliteTableExists(t, db, "users"))
+
+	require.NoError(t, m.Rollback(ctx, db))
+	assert.True(t, sqliteTableExists(t, db, "auth_users"))
+	assert.False(t, sqliteTableExists(t, db, "users"))
+
+	require.NoError(t, m.RollbackAll(ctx, db))
+	assert.False(t, sqliteTableExists(t, db, "auth_users"))
+	assert.False(t, sqliteTableExists(t, db, "users"))
+}
+
+func TestMigrations_AutoGeneratedSourceNamesRemainUniqueAcrossKinds(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "sql[1]",
+			Root: fstest.MapFS{
+				"0001_reserved.up.sql":   {Data: []byte("SELECT 1;")},
+				"0001_reserved.down.sql": {Data: []byte("SELECT 1;")},
+			},
+		},
+		OrderedMigrationSource{
+			Name: "dialect[1]",
+			Root: fstest.MapFS{
+				"0002_reserved.up.sql":   {Data: []byte("SELECT 1;")},
+				"0002_reserved.down.sql": {Data: []byte("SELECT 1;")},
+			},
+		},
+	))
+
+	m.RegisterSQLMigrations(fstest.MapFS{
+		"0003_plain.up.sql":   {Data: []byte("SELECT 1;")},
+		"0003_plain.down.sql": {Data: []byte("SELECT 1;")},
+	})
+	m.RegisterDialectMigrations(
+		fstest.MapFS{
+			"sqlite/0004_traits.up.sql":   {Data: []byte("SELECT 1;")},
+			"sqlite/0004_traits.down.sql": {Data: []byte("SELECT 1;")},
+		},
+		WithDialectName("sqlite"),
+	)
+
+	plan, err := m.Plan(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"sql[2]", "dialect[2]", "sql[1]", "dialect[1]"}, plan.SelectedSources)
 }
 
 func TestValidateDialectsIncludesOrderedSources(t *testing.T) {
@@ -862,7 +994,7 @@ func TestMigrations_Migrate_WithSQLMigrations(t *testing.T) {
 }
 
 func TestMigrations_Rollback_NoMigrations(t *testing.T) {
-	db, _, err := sqlmock.New()
+	db, sqlMock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -872,6 +1004,10 @@ func TestMigrations_Rollback_NoMigrations(t *testing.T) {
 	mockLogger := new(MockLogger)
 	mockLogger.On("Debug", "migrations: no migrations registered to roll back", mock.Anything).Return().Maybe()
 	m.SetLogger(mockLogger)
+
+	sqlMock.ExpectQuery("SELECT").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "name", "group_id", "migrated_at"}),
+	)
 
 	// With no migrations registered, it should return early
 	err = m.Rollback(context.Background(), bunDB)
@@ -881,7 +1017,7 @@ func TestMigrations_Rollback_NoMigrations(t *testing.T) {
 }
 
 func TestMigrations_RollbackAll(t *testing.T) {
-	db, _, err := sqlmock.New()
+	db, sqlMock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -891,6 +1027,10 @@ func TestMigrations_RollbackAll(t *testing.T) {
 	mockLogger := new(MockLogger)
 	mockLogger.On("Debug", "migrations: no migrations registered to roll back", mock.Anything).Return().Maybe()
 	m.SetLogger(mockLogger)
+
+	sqlMock.ExpectQuery("SELECT").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "name", "group_id", "migrated_at"}),
+	)
 
 	// With no migrations registered, it should return early
 	err = m.RollbackAll(context.Background(), bunDB)
