@@ -1,13 +1,10 @@
 package persistence
 
 import (
-	"context"
 	"fmt"
 	"io/fs"
 	"sort"
 
-	apierrors "github.com/goliatone/go-errors"
-	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/migrate"
 )
 
@@ -58,44 +55,7 @@ type orderedLayerIdentity struct {
 	direction orderedDirection
 }
 
-func buildOrderedMigrations(
-	ctx context.Context,
-	db *bun.DB,
-	registrations []orderedSourceRegistration,
-) ([]migrate.Migration, map[string]OrderedMigrationMetadata, error) {
-	if len(registrations) == 0 {
-		return nil, map[string]OrderedMigrationMetadata{}, nil
-	}
-
-	out := make([]migrate.Migration, 0)
-	metadata := make(map[string]OrderedMigrationMetadata)
-
-	for _, source := range registrations {
-		buildResult, err := source.registration.buildFileSystems(ctx, db)
-		if err != nil {
-			return nil, nil, apierrors.Wrap(err,
-				apierrors.CategoryInternal,
-				"failed to prepare ordered source dialect migrations",
-			).WithMetadata(map[string]any{"source_index": source.sequence, "source_name": source.name})
-		}
-
-		sourceMigrations, sourceMeta, err := compileOrderedSourceMigrations(source.name, source.sequence, buildResult.sourceLayers)
-		if err != nil {
-			return nil, nil, apierrors.Wrap(err,
-				apierrors.CategoryInternal,
-				"failed to compile ordered source migrations",
-			).WithMetadata(map[string]any{"source_index": source.sequence, "source_name": source.name})
-		}
-
-		out = append(out, sourceMigrations...)
-		for syntheticName, meta := range sourceMeta {
-			metadata[syntheticName] = meta
-		}
-	}
-
-	return out, metadata, nil
-}
-
+//nolint:funlen,gocyclo // Ordered migration compilation intentionally keeps duplicate detection and layer overrides together.
 func compileOrderedSourceMigrations(
 	sourceName string,
 	sourceIdx int,
@@ -120,9 +80,9 @@ func compileOrderedSourceMigrations(
 				return nil
 			}
 
-			version, comment, direction, ok, err := parseOrderedMigrationFile(path)
-			if err != nil {
-				return err
+			version, comment, direction, ok, parseErr := parseOrderedMigrationFile(path)
+			if parseErr != nil {
+				return parseErr
 			}
 			if !ok {
 				return nil
