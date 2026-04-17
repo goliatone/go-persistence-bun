@@ -111,6 +111,7 @@ func (m *Migrations) LastPlan() *MigrationPlan {
 	return cloneMigrationPlan(m.lastPlan)
 }
 
+//nolint:funlen,gocyclo // This function intentionally coordinates source selection, conflict checks, and applied-status hydration in one place.
 func (m *Migrations) resolvePlan(
 	ctx context.Context,
 	db *bun.DB,
@@ -439,6 +440,7 @@ func compileLayeredSourcePlan(
 	return out, nil
 }
 
+//nolint:funlen,gocyclo // Layered SQL migration compilation intentionally keeps duplicate detection and override semantics together.
 func compileLayeredSourceMigrations(
 	sourceName string,
 	sourceLayers []migrationSourceLayer,
@@ -462,9 +464,9 @@ func compileLayeredSourceMigrations(
 				return nil
 			}
 
-			version, comment, direction, ok, err := parseSQLMigrationFile(path)
-			if err != nil {
-				return err
+			version, comment, direction, ok, parseErr := parseSQLMigrationFile(path)
+			if parseErr != nil {
+				return parseErr
 			}
 			if !ok {
 				return nil
@@ -617,19 +619,19 @@ func qualifyLayerPath(prefix, path string) string {
 func parseSQLMigrationFile(path string) (string, string, orderedDirection, bool, error) {
 	base := strings.ToLower(filepath.Base(path))
 
-	direction := orderedDirectionUnknown
 	if strings.HasSuffix(base, ".up.sql") {
-		direction = orderedDirectionUp
-	} else if strings.HasSuffix(base, ".down.sql") {
-		direction = orderedDirectionDown
-	} else {
-		return "", "", orderedDirectionUnknown, false, nil
+		matches := sqlMigrationNameRE.FindStringSubmatch(base)
+		if matches == nil {
+			return "", "", orderedDirectionUnknown, false, fmt.Errorf("unsupported migration name format: %q", filepath.Base(path))
+		}
+		return matches[1], matches[2], orderedDirectionUp, true, nil
 	}
-
-	matches := sqlMigrationNameRE.FindStringSubmatch(base)
-	if matches == nil {
-		return "", "", orderedDirectionUnknown, false, fmt.Errorf("unsupported migration name format: %q", filepath.Base(path))
+	if strings.HasSuffix(base, ".down.sql") {
+		matches := sqlMigrationNameRE.FindStringSubmatch(base)
+		if matches == nil {
+			return "", "", orderedDirectionUnknown, false, fmt.Errorf("unsupported migration name format: %q", filepath.Base(path))
+		}
+		return matches[1], matches[2], orderedDirectionDown, true, nil
 	}
-
-	return matches[1], matches[2], direction, true, nil
+	return "", "", orderedDirectionUnknown, false, nil
 }
