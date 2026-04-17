@@ -382,6 +382,7 @@ func (r dialectRegistration) resolveDialect(ctx context.Context, db *bun.DB) (st
 	return defaultDialectName, nil
 }
 
+//nolint:funlen,gocyclo // Validation deliberately combines target selection, inventory checks, and parity checks for one registration.
 func (r dialectRegistration) validate(ctx context.Context, db *bun.DB, idx int) error {
 	targets := r.opts.validationTargets()
 	targetSet := map[string]struct{}{}
