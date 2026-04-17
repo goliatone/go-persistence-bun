@@ -67,7 +67,9 @@ func (m *Migrations) logger() Logger {
 // for the scneario of importing migrations from a different project that might need
 // to be run before others but have a naming that would put them after
 func (m *Migrations) initSQLMigrations(ctx context.Context, db *bun.DB) (*migrate.Migrations, error) {
-	resolved, err := m.resolvePlan(ctx, db, nil)
+	resolved, err := m.resolvePlan(ctx, db, resolvePlanOptions{
+		rejectSubsetConflicts: true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +86,7 @@ func (m *Migrations) RegisterSQLMigrations(migrations ...fs.FS) *Migrations {
 	m.mx.Lock()
 	for _, migrationFS := range migrations {
 		m.Files = append(m.Files, migrationFS)
-		m.sqlSourceNames = append(m.sqlSourceNames, defaultSQLSourceName(len(m.sqlSourceNames)))
+		m.sqlSourceNames = append(m.sqlSourceNames, m.nextAvailableAutoSourceNameLocked(defaultSQLSourceName))
 	}
 	m.mx.Unlock()
 	return m
@@ -108,7 +110,7 @@ func (m *Migrations) RegisterDialectMigrations(root fs.FS, opts ...DialectMigrat
 	m.dialectRegistrations = append(m.dialectRegistrations, dialectRegistration{
 		root:       root,
 		opts:       config,
-		sourceName: defaultDialectSourceName(len(m.dialectRegistrations)),
+		sourceName: m.nextAvailableAutoSourceNameLocked(defaultDialectSourceName),
 	})
 	m.mx.Unlock()
 
@@ -120,18 +122,7 @@ func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigration
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	seen := make(map[string]struct{}, len(m.orderedRegistrations)+len(sources))
-	for _, existing := range m.sqlSourceNames {
-		seen[existing] = struct{}{}
-	}
-	for _, existing := range m.dialectRegistrations {
-		if existing.sourceName != "" {
-			seen[existing.sourceName] = struct{}{}
-		}
-	}
-	for _, existing := range m.orderedRegistrations {
-		seen[existing.name] = struct{}{}
-	}
+	seen := m.sourceNameSetLocked()
 
 	for idx, source := range sources {
 		name := strings.TrimSpace(source.Name)
@@ -266,6 +257,10 @@ func (m *Migrations) migrateWithSourceSelection(
 
 	selected := make(map[string]struct{}, len(sourceNames))
 	for _, name := range sourceNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
 		selected[name] = struct{}{}
 	}
 
@@ -275,7 +270,10 @@ func (m *Migrations) migrateWithSourceSelection(
 		}
 	}
 
-	resolved, err := m.resolvePlan(ctx, db, sourceNames)
+	resolved, err := m.resolvePlan(ctx, db, resolvePlanOptions{
+		sourceNames:           sourceNames,
+		rejectSubsetConflicts: true,
+	})
 	if err != nil {
 		return err
 	}
@@ -299,16 +297,25 @@ func (m *Migrations) migrateWithSourceSelection(
 // which will be from the SQL set if it exists, otherwise from the Go set.
 // TODO: more robust implementation which requires more complex logic
 func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
-	sqlMigrations, err := m.initSQLMigrations(ctx, db)
+	applied, err := m.appliedMigrations(ctx, db)
 	if err != nil {
 		return err
 	}
-
-	if sqlMigrations == nil {
-		//no migrations registered so nothing to rollback
+	lastGroup := applied.LastGroup()
+	if lastGroup == nil || len(lastGroup.Migrations) == 0 {
 		m.logger().Debug("migrations: no migrations registered to roll back")
 		return nil
 	}
+
+	sqlMigrations, resolved, err := m.resolveRollbackMigrations(ctx, db, migrationNameSet(lastGroup.Migrations))
+	if err != nil {
+		return err
+	}
+	if sqlMigrations == nil {
+		m.logger().Debug("migrations: no migrations registered to roll back")
+		return nil
+	}
+	m.cacheResolvedPlan(resolved)
 
 	migrator := migrate.NewMigrator(db, sqlMigrations)
 	if err := migrator.Init(ctx); err != nil {
@@ -335,16 +342,24 @@ func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.M
 
 // RollbackAll rollbacks every registered migration group.
 func (m *Migrations) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrate.MigrationOption) error {
-	sqlMigrations, err := m.initSQLMigrations(ctx, db)
+	applied, err := m.appliedMigrations(ctx, db)
 	if err != nil {
 		return err
 	}
-
-	if sqlMigrations == nil {
-		//no migrations registered so nothing to rollback
+	if len(applied) == 0 {
 		m.logger().Debug("migrations: no migrations registered to roll back")
 		return nil
 	}
+
+	sqlMigrations, resolved, err := m.resolveRollbackMigrations(ctx, db, migrationNameSet(applied))
+	if err != nil {
+		return err
+	}
+	if sqlMigrations == nil {
+		m.logger().Debug("migrations: no migrations registered to roll back")
+		return nil
+	}
+	m.cacheResolvedPlan(resolved)
 
 	migrator := migrate.NewMigrator(db, sqlMigrations)
 	if err := migrator.Init(ctx); err != nil {
@@ -500,4 +515,69 @@ func migrationNameFromError(err error) string {
 		}
 	}
 	return ""
+}
+
+func (m *Migrations) nextAvailableAutoSourceNameLocked(generator func(int) string) string {
+	used := m.sourceNameSetLocked()
+	for idx := 0; ; idx++ {
+		name := generator(idx)
+		if _, exists := used[name]; exists {
+			continue
+		}
+		return name
+	}
+}
+
+func (m *Migrations) sourceNameSetLocked() map[string]struct{} {
+	used := make(map[string]struct{}, len(m.sqlSourceNames)+len(m.dialectRegistrations)+len(m.orderedRegistrations))
+	for _, name := range m.sqlSourceNames {
+		used[name] = struct{}{}
+	}
+	for _, registration := range m.dialectRegistrations {
+		if registration.sourceName == "" {
+			continue
+		}
+		used[registration.sourceName] = struct{}{}
+	}
+	for _, registration := range m.orderedRegistrations {
+		used[registration.name] = struct{}{}
+	}
+	return used
+}
+
+func (m *Migrations) appliedMigrations(ctx context.Context, db *bun.DB) (migrate.MigrationSlice, error) {
+	migrator := migrate.NewMigrator(db, migrate.NewMigrations())
+	applied, err := migrator.AppliedMigrations(ctx)
+	if err != nil {
+		if isMissingMigrationsTableError(err) {
+			return nil, nil
+		}
+		return nil, apierrors.Wrap(err, apierrors.CategoryOperation, "failed to inspect applied migrations")
+	}
+	return applied, nil
+}
+
+func (m *Migrations) resolveRollbackMigrations(
+	ctx context.Context,
+	db *bun.DB,
+	requiredNames map[string]struct{},
+) (*migrate.Migrations, *resolvedMigrationPlan, error) {
+	resolved, err := m.resolvePlan(ctx, db, resolvePlanOptions{
+		requiredMigrationNames: requiredNames,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if resolved.migrations == nil || len(resolved.migrations.Sorted()) == 0 {
+		return nil, nil, nil
+	}
+	return resolved.migrations, resolved, nil
+}
+
+func migrationNameSet(migrations migrate.MigrationSlice) map[string]struct{} {
+	out := make(map[string]struct{}, len(migrations))
+	for _, migration := range migrations {
+		out[migration.Name] = struct{}{}
+	}
+	return out
 }
