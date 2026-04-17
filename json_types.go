@@ -44,7 +44,7 @@ func (m JSONMap) Value() (driver.Value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("persistence: JSONMap encode: %w", err)
 	}
-	return payload, nil
+	return string(payload), nil
 }
 
 // JSONStringSlice is a portable JSON string-array wrapper for Bun models.
@@ -84,7 +84,7 @@ func (s JSONStringSlice) Value() (driver.Value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("persistence: JSONStringSlice encode: %w", err)
 	}
-	return payload, nil
+	return string(payload), nil
 }
 
 func jsonDataFromSource(src any) ([]byte, error) {
