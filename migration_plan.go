@@ -33,19 +33,24 @@ type MigrationPlan struct {
 
 // MigrationPlanEntry captures one resolved migration in execution order.
 type MigrationPlanEntry struct {
-	SyntheticName   string              `json:"synthetic_name"`
-	SourceName      string              `json:"source_name"`
-	SourceKind      MigrationSourceKind `json:"source_kind"`
-	SourceLabel     string              `json:"source_label,omitempty"`
-	OriginalVersion string              `json:"original_version"`
-	OriginalComment string              `json:"original_comment"`
-	UpPath          string              `json:"up_path,omitempty"`
-	DownPath        string              `json:"down_path,omitempty"`
-	ExecutionOrder  int                 `json:"execution_order"`
-	Dialect         string              `json:"dialect,omitempty"`
-	Applied         bool                `json:"applied"`
-	AppliedGroupID  int64               `json:"applied_group_id,omitempty"`
-	AppliedAt       time.Time           `json:"applied_at,omitempty"`
+	SyntheticName    string                       `json:"synthetic_name"`
+	SourceName       string                       `json:"source_name"`
+	SourceKind       MigrationSourceKind          `json:"source_kind"`
+	SourceLabel      string                       `json:"source_label,omitempty"`
+	SourceKey        string                       `json:"source_key,omitempty"`
+	SourceOrder      int                          `json:"source_order,omitempty"`
+	SourceDependsOn  []string                     `json:"source_depends_on,omitempty"`
+	ResolvedPosition int                          `json:"resolved_source_position,omitempty"`
+	IdentityMode     OrderedMigrationIdentityMode `json:"identity_mode,omitempty"`
+	OriginalVersion  string                       `json:"original_version"`
+	OriginalComment  string                       `json:"original_comment"`
+	UpPath           string                       `json:"up_path,omitempty"`
+	DownPath         string                       `json:"down_path,omitempty"`
+	ExecutionOrder   int                          `json:"execution_order"`
+	Dialect          string                       `json:"dialect,omitempty"`
+	Applied          bool                         `json:"applied"`
+	AppliedGroupID   int64                        `json:"applied_group_id,omitempty"`
+	AppliedAt        time.Time                    `json:"applied_at,omitempty"`
 }
 
 type migrationSourceLayer struct {
@@ -63,9 +68,10 @@ type sourcePlanSpec struct {
 }
 
 type resolvedMigrationPlan struct {
-	plan        *MigrationPlan
-	migrations  *migrate.Migrations
-	entryByName map[string]MigrationPlanEntry
+	plan         *MigrationPlan
+	migrations   *migrate.Migrations
+	entryByName  map[string]MigrationPlanEntry
+	orderedGraph []orderedSourceRegistration
 }
 
 type resolvePlanOptions struct {
@@ -117,7 +123,10 @@ func (m *Migrations) resolvePlan(
 	db *bun.DB,
 	opts resolvePlanOptions,
 ) (*resolvedMigrationPlan, error) {
-	specs := m.sourcePlanSpecs()
+	specs, orderedGraph, err := m.sourcePlanSpecs()
+	if err != nil {
+		return nil, err
+	}
 	selectedSpecs, selectedNames, err := selectSourcePlanSpecs(specs, opts.sourceNames)
 	if err != nil {
 		return nil, err
@@ -126,6 +135,13 @@ func (m *Migrations) resolvePlan(
 	type compiledSourcePlan struct {
 		spec     sourcePlanSpec
 		resolved *resolvedMigrationPlan
+	}
+
+	if err := validateSelectedOrderedDependencies(selectedSpecs, orderedGraph, opts.sourceNames); err != nil {
+		return nil, err
+	}
+	if err := m.verifyOrderedSourceGraph(ctx, db, orderedGraph); err != nil {
+		return nil, err
 	}
 
 	compiledPlans := make([]compiledSourcePlan, 0, len(selectedSpecs))
@@ -166,8 +182,9 @@ func (m *Migrations) resolvePlan(
 			SelectedSources: selectedNames,
 			Entries:         make([]MigrationPlanEntry, 0),
 		},
-		migrations:  migrate.NewMigrations(),
-		entryByName: make(map[string]MigrationPlanEntry),
+		migrations:   migrate.NewMigrations(),
+		entryByName:  make(map[string]MigrationPlanEntry),
+		orderedGraph: append([]orderedSourceRegistration(nil), orderedGraph...),
 	}
 
 	requiredFound := make(map[string]struct{}, len(opts.requiredMigrationNames))
@@ -256,13 +273,18 @@ func (m *Migrations) resolvePlan(
 	return out, nil
 }
 
-func (m *Migrations) sourcePlanSpecs() []sourcePlanSpec {
+func (m *Migrations) sourcePlanSpecs() ([]sourcePlanSpec, []orderedSourceRegistration, error) {
 	m.mx.Lock()
 	files := append([]fs.FS(nil), m.Files...)
 	sqlSourceNames := append([]string(nil), m.sqlSourceNames...)
 	dialectRegistrations := append([]dialectRegistration(nil), m.dialectRegistrations...)
 	orderedRegistrations := append([]orderedSourceRegistration(nil), m.orderedRegistrations...)
 	m.mx.Unlock()
+
+	resolvedOrderedRegistrations, err := resolveOrderedSourceGraph(orderedRegistrations)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	specs := make([]sourcePlanSpec, 0, len(files)+len(dialectRegistrations)+len(orderedRegistrations))
 	for idx, migrationFS := range files {
@@ -289,7 +311,7 @@ func (m *Migrations) sourcePlanSpecs() []sourcePlanSpec {
 			dialect:     registration,
 		})
 	}
-	for _, registration := range orderedRegistrations {
+	for _, registration := range resolvedOrderedRegistrations {
 		specs = append(specs, sourcePlanSpec{
 			sourceName:  registration.name,
 			sourceLabel: registration.name,
@@ -297,7 +319,7 @@ func (m *Migrations) sourcePlanSpecs() []sourcePlanSpec {
 			ordered:     registration,
 		})
 	}
-	return specs
+	return specs, resolvedOrderedRegistrations, nil
 }
 
 func selectSourcePlanSpecs(
@@ -348,6 +370,58 @@ func availableSourceNames(specs []sourcePlanSpec) []string {
 	return names
 }
 
+func validateSelectedOrderedDependencies(
+	selectedSpecs []sourcePlanSpec,
+	orderedGraph []orderedSourceRegistration,
+	sourceNames []string,
+) error {
+	if len(sourceNames) == 0 || !orderedSourcesUseStableIdentity(orderedGraph) {
+		return nil
+	}
+
+	selectedByKey := make(map[string]sourcePlanSpec, len(selectedSpecs))
+	for _, spec := range selectedSpecs {
+		if spec.sourceKind != MigrationSourceKindOrdered {
+			continue
+		}
+		selectedByKey[spec.ordered.sourceKey] = spec
+	}
+	if len(selectedByKey) == 0 {
+		return nil
+	}
+
+	availableByKey := make(map[string]orderedSourceRegistration, len(orderedGraph))
+	for _, registration := range orderedGraph {
+		availableByKey[registration.sourceKey] = registration
+	}
+
+	for _, spec := range selectedSpecs {
+		if spec.sourceKind != MigrationSourceKindOrdered {
+			continue
+		}
+		for _, dependencyKey := range spec.ordered.dependsOn {
+			if _, ok := selectedByKey[dependencyKey]; ok {
+				continue
+			}
+			dependency := availableByKey[dependencyKey]
+			return &OrderedSourceGraphError{
+				Kind:       ErrOrderedSourceMissingSelected,
+				SourceName: spec.sourceName,
+				SourceKey:  spec.ordered.sourceKey,
+				Dependency: dependencyKey,
+				Message: fmt.Sprintf(
+					"selected ordered migration source %q (%s) depends on excluded source %q (%s)",
+					spec.sourceName,
+					spec.ordered.sourceKey,
+					dependency.name,
+					dependencyKey,
+				),
+			}
+		}
+	}
+	return nil
+}
+
 func compileSourcePlan(
 	ctx context.Context,
 	db *bun.DB,
@@ -380,8 +454,7 @@ func compileSourcePlan(
 			return nil, fmt.Errorf("failed to prepare ordered migration source %q: %w", spec.sourceName, err)
 		}
 		migrations, metadata, err := compileOrderedSourceMigrations(
-			spec.ordered.name,
-			spec.ordered.sequence,
+			spec.ordered,
 			buildResult.sourceLayers,
 		)
 		if err != nil {
@@ -395,15 +468,20 @@ func compileSourcePlan(
 			out.migrations.Add(migration)
 			meta := metadata[migration.Name]
 			out.entryByName[migration.Name] = MigrationPlanEntry{
-				SyntheticName:   meta.SyntheticName,
-				SourceName:      spec.sourceName,
-				SourceKind:      spec.sourceKind,
-				SourceLabel:     spec.sourceLabel,
-				OriginalVersion: meta.OriginalVersion,
-				OriginalComment: meta.OriginalComment,
-				UpPath:          meta.UpPath,
-				DownPath:        meta.DownPath,
-				Dialect:         buildResult.dialect,
+				SyntheticName:    meta.SyntheticName,
+				SourceName:       spec.sourceName,
+				SourceKind:       spec.sourceKind,
+				SourceLabel:      spec.sourceLabel,
+				SourceKey:        meta.SourceKey,
+				SourceOrder:      meta.SourceOrder,
+				SourceDependsOn:  append([]string(nil), meta.SourceDependsOn...),
+				ResolvedPosition: meta.ResolvedPosition,
+				IdentityMode:     meta.IdentityMode,
+				OriginalVersion:  meta.OriginalVersion,
+				OriginalComment:  meta.OriginalComment,
+				UpPath:           meta.UpPath,
+				DownPath:         meta.DownPath,
+				Dialect:          buildResult.dialect,
 			}
 		}
 		return out, nil
@@ -584,6 +662,9 @@ func cloneMigrationPlan(plan *MigrationPlan) *MigrationPlan {
 		Entries:         make([]MigrationPlanEntry, len(plan.Entries)),
 	}
 	copy(clone.Entries, plan.Entries)
+	for idx := range clone.Entries {
+		clone.Entries[idx].SourceDependsOn = append([]string(nil), plan.Entries[idx].SourceDependsOn...)
+	}
 	return clone
 }
 
