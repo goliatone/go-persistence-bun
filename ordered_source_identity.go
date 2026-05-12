@@ -143,9 +143,6 @@ func (m *Migrations) verifyOrderedSourceGraph(ctx context.Context, db *bun.DB, g
 	if db == nil || !orderedSourcesUseStableIdentity(graph) {
 		return nil
 	}
-	if tableErr := ensureOrderedSourceIdentityTables(ctx, db); tableErr != nil {
-		return tableErr
-	}
 
 	currentRows, fingerprint, err := orderedSourceIdentityRows(graph)
 	if err != nil {
@@ -333,9 +330,6 @@ func (m *Migrations) orderedSourceAliases(ctx context.Context, db *bun.DB) (map[
 	if db == nil {
 		return out, nil
 	}
-	if err := ensureOrderedSourceIdentityTables(ctx, db); err != nil {
-		return nil, err
-	}
 	var rows []orderedSourceAliasRow
 	if err := db.NewSelect().Model(&rows).Scan(ctx); err != nil {
 		if isMissingOrderedIdentityTableError(err) {
@@ -446,13 +440,13 @@ func orderedRepairOperations(
 	}
 
 	appliedByName := migrationNameSet(applied)
-	currentBySourceVersion := currentOrderedEntriesBySourceVersion(entryByName)
+	currentBySourceVersion := currentOrderedEntriesBySourceKeyVersion(entryByName)
 	operations := make([]orderedRepairOperation, 0, len(appliedLegacyNames))
 	for legacyName, legacyMeta := range legacyMetadata {
 		if _, ok := appliedByName[legacyName]; !ok {
 			continue
 		}
-		current, ok := currentBySourceVersion[legacyMeta.SourceName+"/"+legacyMeta.OriginalVersion]
+		current, ok := currentBySourceVersion[legacyMeta.SourceKey+"/"+legacyMeta.OriginalVersion]
 		if !ok {
 			return nil, repairMarkerMismatchError(legacyName, legacyMeta)
 		}
@@ -485,13 +479,13 @@ func validateAppliedLegacyMappings(
 	return nil
 }
 
-func currentOrderedEntriesBySourceVersion(entryByName map[string]MigrationPlanEntry) map[string]MigrationPlanEntry {
+func currentOrderedEntriesBySourceKeyVersion(entryByName map[string]MigrationPlanEntry) map[string]MigrationPlanEntry {
 	currentBySourceVersion := make(map[string]MigrationPlanEntry, len(entryByName))
 	for _, entry := range entryByName {
 		if entry.SourceKind != MigrationSourceKindOrdered {
 			continue
 		}
-		currentBySourceVersion[entry.SourceName+"/"+entry.OriginalVersion] = entry
+		currentBySourceVersion[entry.SourceKey+"/"+entry.OriginalVersion] = entry
 	}
 	return currentBySourceVersion
 }
@@ -501,6 +495,7 @@ func repairMarkerMismatchError(legacyName string, legacyMeta OrderedMigrationMet
 		Kind:        ErrOrderedSourceRepairMarkerMismatch,
 		LegacyName:  legacyName,
 		SourceName:  legacyMeta.SourceName,
+		SourceKey:   legacyMeta.SourceKey,
 		Expected:    "current source-stable migration for source/version",
 		Observed:    legacyMeta.OriginalVersion,
 		Remediation: "register the matching current source-stable source or provide the historical source mapping that matches this database",
@@ -630,6 +625,20 @@ func compileLegacyOrderedSources(
 				Remediation: "provide the filesystem used to compile this historical ordered source",
 			}
 		}
+		legacySourceKey := strings.TrimSpace(source.SourceKey)
+		if legacySourceKey == "" {
+			legacySourceKey = name
+		}
+		normalizedLegacySourceKey, keyErr := normalizeOrderedSourceKey(legacySourceKey)
+		if keyErr != nil {
+			return nil, nil, &OrderedSourceRepairError{
+				Kind:        ErrOrderedSourceRepair,
+				SourceName:  name,
+				Expected:    "valid legacy source key",
+				Observed:    legacySourceKey,
+				Remediation: "provide a legacy SourceKey that matches the current source-stable key",
+			}
+		}
 		registration, err := normalizeOrderedSourceRegistration(OrderedMigrationSource{Name: name, Root: source.Root}, name, idx)
 		if err != nil {
 			return nil, nil, err
@@ -653,6 +662,7 @@ func compileLegacyOrderedSources(
 			migrations.Add(migration)
 		}
 		for key, value := range meta {
+			value.SourceKey = normalizedLegacySourceKey
 			if previous, exists := metadata[key]; exists {
 				return nil, nil, &OrderedSourceRepairError{
 					Kind:       ErrOrderedSourceRepairAmbiguousMarker,
