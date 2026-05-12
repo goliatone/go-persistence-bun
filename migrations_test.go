@@ -2,12 +2,14 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	iofs "io/fs"
 	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -664,6 +666,94 @@ func TestMigrations_PlanIncludesResolvedMetadataAcrossSources(t *testing.T) {
 	require.Equal(t, plan, m.LastPlan())
 }
 
+func TestMigrations_SourceStablePlanMetadataAndInsertionStability(t *testing.T) {
+	ctx := context.Background()
+	authFS := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("SELECT 1;")},
+		"0001_auth.down.sql": {Data: []byte("SELECT 1;")},
+	}
+	usersFS := fstest.MapFS{
+		"0001_users.up.sql":   {Data: []byte("SELECT 1;")},
+		"0001_users.down.sql": {Data: []byte("SELECT 1;")},
+	}
+	cmsFS := fstest.MapFS{
+		"0001_cms.up.sql":   {Data: []byte("SELECT 1;")},
+		"0001_cms.down.sql": {Data: []byte("SELECT 1;")},
+	}
+
+	first := NewMigrations()
+	require.NoError(t, first.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+		NewStableOrderedMigrationSource("go-users", usersFS, "go-users", 30, WithOrderedMigrationDependencies("go-auth")),
+	))
+	firstPlan, err := first.Plan(ctx, nil)
+	require.NoError(t, err)
+	firstUsers := planEntryBySourceAndVersion(t, firstPlan, "go-users", "0001")
+	require.Equal(t, "ordsrc_000030_go_users_0001", firstUsers.SyntheticName)
+	assert.Equal(t, "go_users", firstUsers.SourceKey)
+	assert.Equal(t, 30, firstUsers.SourceOrder)
+	assert.Equal(t, []string{"go_auth"}, firstUsers.SourceDependsOn)
+	assert.Equal(t, OrderedMigrationIdentitySourceStable, firstUsers.IdentityMode)
+
+	second := NewMigrations()
+	require.NoError(t, second.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-users", usersFS, "go-users", 30, WithOrderedMigrationDependencies("go-auth")),
+		NewStableOrderedMigrationSource("go-cms", cmsFS, "go-cms", 20, WithOrderedMigrationDependencies("go-auth")),
+		NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+	))
+	secondPlan, err := second.Plan(ctx, nil)
+	require.NoError(t, err)
+	secondUsers := planEntryBySourceAndVersion(t, secondPlan, "go-users", "0001")
+	assert.Equal(t, firstUsers.SyntheticName, secondUsers.SyntheticName)
+	assert.Equal(t, 3, secondUsers.ResolvedPosition)
+	assert.Equal(t, []string{"go-auth", "go-cms", "go-users"}, secondPlan.SelectedSources)
+}
+
+func TestMigrations_SourceStableRegistrationValidation(t *testing.T) {
+	fsys := fstest.MapFS{"0001_init.up.sql": {Data: []byte("SELECT 1;")}}
+
+	m := NewMigrations()
+	err := m.RegisterOrderedMigrationSources(OrderedMigrationSource{
+		Name:      "go-auth",
+		Root:      fsys,
+		SourceKey: "go-auth",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceInvalidConfig))
+
+	m = NewMigrations()
+	err = m.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 10),
+		OrderedMigrationSource{Name: "go-users", Root: fsys},
+	)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceMixedIdentity))
+}
+
+func TestMigrations_PlanSourcesRejectsMissingStableDependency(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fstest.MapFS{
+			"0001_auth.up.sql": {Data: []byte("SELECT 1;")},
+		}, "go-auth", 10),
+		NewStableOrderedMigrationSource("go-users", fstest.MapFS{
+			"0001_users.up.sql": {Data: []byte("SELECT 1;")},
+		}, "go-users", 20, WithOrderedMigrationDependencies("go-auth")),
+	))
+
+	_, err := m.PlanSources(ctx, nil, "go-users")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceMissingSelected))
+	require.Contains(t, err.Error(), "go-users")
+	require.Contains(t, err.Error(), "go_auth")
+
+	_, err = m.PlanSources(ctx, nil, "go-auth")
+	require.NoError(t, err)
+	_, err = m.PlanSources(ctx, nil, "go-auth", "go-users")
+	require.NoError(t, err)
+}
+
 func TestMigrations_PlanSourcesRejectsSelectionThatCollidesWithExcludedSources(t *testing.T) {
 	ctx := context.Background()
 	m := NewMigrations()
@@ -753,6 +843,525 @@ func TestMigrations_MigrateSourcesRejectsSelectionThatCollidesWithExcludedSource
 	err := m.MigrateSources(ctx, db, "sql[1]")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsafe migration source selection")
+}
+
+func TestMigrations_SourceStablePersistsAndDetectsGraphDrift(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	fsys := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE stable_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE stable_auth;")},
+	}
+
+	m := NewMigrations()
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 10),
+	))
+	require.NoError(t, m.Migrate(ctx, db))
+	assert.True(t, sqliteTableExists(t, db, "bun_ordered_migration_sources"))
+
+	unchanged := NewMigrations()
+	require.NoError(t, unchanged.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 10),
+	))
+	require.NoError(t, unchanged.Migrate(ctx, db))
+
+	drifted := NewMigrations()
+	require.NoError(t, drifted.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 20),
+	))
+	_, err := drifted.Plan(ctx, nil)
+	require.NoError(t, err)
+
+	_, err = drifted.Plan(ctx, db)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceDrift))
+	require.Contains(t, err.Error(), "source_order")
+
+	_, err = drifted.PlanSources(ctx, db, "go-auth")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceDrift))
+	require.Contains(t, err.Error(), "source_order")
+
+	err = drifted.Migrate(ctx, db)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceDrift))
+	require.Contains(t, err.Error(), "source_order")
+}
+
+func TestMigrations_SourceStableDetectsAdditionalGraphDriftFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		field      string
+		configure  func(t *testing.T, authFS, usersFS fstest.MapFS) *Migrations
+		planSource string
+	}{
+		{
+			name:  "dependency drift",
+			field: "dependencies",
+			configure: func(t *testing.T, authFS, usersFS fstest.MapFS) *Migrations {
+				m := NewMigrations()
+				require.NoError(t, m.RegisterOrderedMigrationSources(
+					NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+					NewStableOrderedMigrationSource("go-users", usersFS, "go-users", 20),
+				))
+				return m
+			},
+			planSource: "go-users",
+		},
+		{
+			name:  "source key removal",
+			field: "source_key",
+			configure: func(t *testing.T, authFS, usersFS fstest.MapFS) *Migrations {
+				m := NewMigrations()
+				require.NoError(t, m.RegisterOrderedMigrationSources(
+					NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+				))
+				return m
+			},
+			planSource: "go-auth",
+		},
+		{
+			name:  "resolved position drift",
+			field: "resolved_position",
+			configure: func(t *testing.T, authFS, usersFS fstest.MapFS) *Migrations {
+				cmsFS := fstest.MapFS{
+					"0001_cms.up.sql":   {Data: []byte("CREATE TABLE drift_cms (id INTEGER PRIMARY KEY);")},
+					"0001_cms.down.sql": {Data: []byte("DROP TABLE drift_cms;")},
+				}
+				m := NewMigrations()
+				require.NoError(t, m.RegisterOrderedMigrationSources(
+					NewStableOrderedMigrationSource("go-cms", cmsFS, "go-cms", 5),
+					NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+					NewStableOrderedMigrationSource("go-users", usersFS, "go-users", 20, WithOrderedMigrationDependencies("go-auth")),
+				))
+				return m
+			},
+			planSource: "go-auth",
+		},
+		{
+			name:  "graph fingerprint drift",
+			field: "graph_fingerprint",
+			configure: func(t *testing.T, authFS, usersFS fstest.MapFS) *Migrations {
+				cmsFS := fstest.MapFS{
+					"0001_cms.up.sql":   {Data: []byte("CREATE TABLE drift_cms_late (id INTEGER PRIMARY KEY);")},
+					"0001_cms.down.sql": {Data: []byte("DROP TABLE drift_cms_late;")},
+				}
+				m := NewMigrations()
+				require.NoError(t, m.RegisterOrderedMigrationSources(
+					NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+					NewStableOrderedMigrationSource("go-users", usersFS, "go-users", 20, WithOrderedMigrationDependencies("go-auth")),
+					NewStableOrderedMigrationSource("go-cms", cmsFS, "go-cms", 30),
+				))
+				return m
+			},
+			planSource: "go-auth",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, cleanup := newSQLiteTestDB(t)
+			defer cleanup()
+
+			authFS := fstest.MapFS{
+				"0001_auth.up.sql":   {Data: []byte("CREATE TABLE drift_auth (id INTEGER PRIMARY KEY);")},
+				"0001_auth.down.sql": {Data: []byte("DROP TABLE drift_auth;")},
+			}
+			usersFS := fstest.MapFS{
+				"0001_users.up.sql":   {Data: []byte("CREATE TABLE drift_users (id INTEGER PRIMARY KEY);")},
+				"0001_users.down.sql": {Data: []byte("DROP TABLE drift_users;")},
+			}
+
+			baseline := NewMigrations()
+			require.NoError(t, baseline.RegisterOrderedMigrationSources(
+				NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+				NewStableOrderedMigrationSource("go-users", usersFS, "go-users", 20, WithOrderedMigrationDependencies("go-auth")),
+			))
+			require.NoError(t, baseline.Migrate(ctx, db))
+
+			drifted := tt.configure(t, authFS, usersFS)
+			_, err := drifted.PlanSources(ctx, db, tt.planSource)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrOrderedSourceDrift))
+			assert.Contains(t, err.Error(), tt.field)
+		})
+	}
+}
+
+func TestMigrations_SourceStableDetectsRollbackTimeDrift(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	fsys := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE rollback_drift_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE rollback_drift_auth;")},
+	}
+
+	baseline := NewMigrations()
+	require.NoError(t, baseline.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 10),
+	))
+	require.NoError(t, baseline.Migrate(ctx, db))
+
+	drifted := NewMigrations()
+	require.NoError(t, drifted.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 20),
+	))
+	err := drifted.Rollback(ctx, db)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceDrift))
+	assert.Contains(t, err.Error(), "source_order")
+}
+
+func TestOrderedSourceIdentityPostgresSchemaAndUpsertSQL(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, sqlMock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() {
+		_ = sqlDB.Close()
+	}()
+
+	db := bun.NewDB(sqlDB, pgdialect.New())
+	graph := []orderedSourceRegistration{
+		{
+			name:             "go-auth",
+			identityMode:     OrderedMigrationIdentitySourceStable,
+			sourceKey:        "go_auth",
+			sourceOrder:      10,
+			resolvedPosition: 1,
+		},
+		{
+			name:             "go-users",
+			identityMode:     OrderedMigrationIdentitySourceStable,
+			sourceKey:        "go_users",
+			sourceOrder:      20,
+			dependsOn:        []string{"go_auth"},
+			resolvedPosition: 2,
+		},
+	}
+
+	sqlMock.ExpectExec(`CREATE TABLE IF NOT EXISTS "bun_ordered_migration_sources"`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	sqlMock.ExpectExec(`CREATE TABLE IF NOT EXISTS "bun_ordered_migration_aliases"`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	sqlMock.ExpectExec(`CREATE UNIQUE INDEX IF NOT EXISTS "bun_ordered_migration_aliases_stable_name_unique"`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	sqlMock.ExpectQuery(`INSERT INTO "bun_ordered_migration_sources".*ON CONFLICT \(source_key\) DO UPDATE`).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now()))
+	sqlMock.ExpectQuery(`INSERT INTO "bun_ordered_migration_sources".*ON CONFLICT \(source_key\) DO UPDATE`).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(time.Now()))
+
+	require.NoError(t, NewMigrations().persistOrderedSourceGraph(ctx, db, graph))
+	require.NoError(t, sqlMock.ExpectationsWereMet())
+
+	rows, _, err := orderedSourceIdentityRows(graph)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	dependencyJSON, err := rows[1].Dependencies.Value()
+	require.NoError(t, err)
+	assert.JSONEq(t, `["go_auth"]`, dependencyJSON.(string))
+}
+
+func TestMigrations_SourceStableDownstreamCompositionExample(t *testing.T) {
+	ctx := context.Background()
+	m := NewMigrations()
+
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fstest.MapFS{
+			"0001_auth.up.sql":   {Data: []byte("SELECT 1;")},
+			"0001_auth.down.sql": {Data: []byte("SELECT 1;")},
+		}, "go-auth", 10),
+		NewStableOrderedMigrationSource("go-users", fstest.MapFS{
+			"0001_users.up.sql":   {Data: []byte("SELECT 1;")},
+			"0001_users.down.sql": {Data: []byte("SELECT 1;")},
+		}, "go-users", 20, WithOrderedMigrationDependencies("go-auth")),
+		NewStableOrderedMigrationSource("go-cms", fstest.MapFS{
+			"0001_cms.up.sql":   {Data: []byte("SELECT 1;")},
+			"0001_cms.down.sql": {Data: []byte("SELECT 1;")},
+		}, "go-cms", 30, WithOrderedMigrationDependencies("go-auth")),
+		NewStableOrderedMigrationSource("go-services", fstest.MapFS{
+			"0001_services.up.sql":   {Data: []byte("SELECT 1;")},
+			"0001_services.down.sql": {Data: []byte("SELECT 1;")},
+		}, "go-services", 40, WithOrderedMigrationDependencies("go-cms")),
+		NewStableOrderedMigrationSource("app-local", fstest.MapFS{
+			"0001_app.up.sql":   {Data: []byte("SELECT 1;")},
+			"0001_app.down.sql": {Data: []byte("SELECT 1;")},
+		}, "garchen-archive-admin", 50, WithOrderedMigrationDependencies("go-services")),
+	))
+
+	plan, err := m.Plan(ctx, nil)
+	require.NoError(t, err)
+
+	var sequence []string
+	dependencies := make(map[string][]string)
+	for _, entry := range plan.Entries {
+		sequence = append(sequence, fmt.Sprintf("%s:%d:%s", entry.SourceKey, entry.SourceOrder, entry.SyntheticName))
+		dependencies[entry.SourceKey] = entry.SourceDependsOn
+	}
+
+	require.Equal(t, []string{
+		"go_auth:10:ordsrc_000010_go_auth_0001",
+		"go_users:20:ordsrc_000020_go_users_0001",
+		"go_cms:30:ordsrc_000030_go_cms_0001",
+		"go_services:40:ordsrc_000040_go_services_0001",
+		"garchen_archive_admin:50:ordsrc_000050_garchen_archive_admin_0001",
+	}, sequence)
+	assert.Equal(t, []string{"go_auth"}, dependencies["go_users"])
+	assert.Equal(t, []string{"go_auth"}, dependencies["go_cms"])
+	assert.Equal(t, []string{"go_cms"}, dependencies["go_services"])
+	assert.Equal(t, []string{"go_services"}, dependencies["garchen_archive_admin"])
+}
+
+func TestMigrations_PositionalModeDoesNotCreateStableMetadataTables(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	m := NewMigrations()
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{
+			Name: "go-auth",
+			Root: fstest.MapFS{
+				"0001_auth.up.sql": {Data: []byte("CREATE TABLE positional_auth (id INTEGER PRIMARY KEY);")},
+			},
+		},
+	))
+	require.NoError(t, m.Migrate(ctx, db))
+	assert.False(t, sqliteTableExists(t, db, "bun_ordered_migration_sources"))
+	assert.False(t, sqliteTableExists(t, db, "bun_ordered_migration_aliases"))
+}
+
+func TestMigrations_BackfillStableOrderedMigrationMarkers(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	fsys := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE backfill_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE backfill_auth;")},
+	}
+
+	legacy := NewMigrations()
+	require.NoError(t, legacy.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: fsys},
+	))
+	require.NoError(t, legacy.Migrate(ctx, db))
+	assert.True(t, sqliteTableExists(t, db, "backfill_auth"))
+
+	stable := NewMigrations()
+	require.NoError(t, stable.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 10),
+	))
+	require.NoError(t, stable.BackfillStableOrderedMigrationMarkers(ctx, db, []OrderedMigrationSource{
+		{Name: "go-auth", Root: fsys},
+	}))
+	require.NoError(t, stable.BackfillStableOrderedMigrationMarkers(ctx, db, []OrderedMigrationSource{
+		{Name: "go-auth", Root: fsys},
+	}))
+
+	plan, err := stable.Plan(ctx, db)
+	require.NoError(t, err)
+	entry := planEntryBySourceAndVersion(t, plan, "go-auth", "0001")
+	assert.Equal(t, "ordsrc_000010_go_auth_0001", entry.SyntheticName)
+	assert.True(t, entry.Applied)
+
+	var aliasCount int
+	err = db.NewSelect().
+		TableExpr("bun_ordered_migration_aliases").
+		ColumnExpr("COUNT(*)").
+		Where("legacy_name = ?", "ord_000001_000001").
+		Where("stable_name = ?", "ordsrc_000010_go_auth_0001").
+		Scan(ctx, &aliasCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, aliasCount)
+
+	var stableAppliedCount int
+	err = db.NewSelect().
+		Model((*migrate.Migration)(nil)).
+		ModelTableExpr("bun_migrations").
+		ColumnExpr("COUNT(*)").
+		Where("name = ?", "ordsrc_000010_go_auth_0001").
+		Scan(ctx, &stableAppliedCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stableAppliedCount)
+
+	require.NoError(t, stable.RollbackAll(ctx, db))
+	assert.False(t, sqliteTableExists(t, db, "backfill_auth"))
+}
+
+func TestMigrations_BackfillStableOrderedMigrationMarkersCleanupLegacyMarkers(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	fsys := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE cleanup_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE cleanup_auth;")},
+	}
+
+	legacy := NewMigrations()
+	require.NoError(t, legacy.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: fsys},
+	))
+	require.NoError(t, legacy.Migrate(ctx, db))
+
+	stable := NewMigrations()
+	require.NoError(t, stable.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 10),
+	))
+	require.NoError(t, stable.BackfillStableOrderedMigrationMarkers(
+		ctx,
+		db,
+		[]OrderedMigrationSource{{Name: "go-auth", Root: fsys}},
+		WithOrderedMigrationRepairCleanupLegacyMarkers(true),
+	))
+
+	var legacyCount int
+	err := db.NewSelect().
+		Model((*migrate.Migration)(nil)).
+		ModelTableExpr("bun_migrations").
+		ColumnExpr("COUNT(*)").
+		Where("name = ?", "ord_000001_000001").
+		Scan(ctx, &legacyCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, legacyCount)
+
+	var stableCount int
+	err = db.NewSelect().
+		Model((*migrate.Migration)(nil)).
+		ModelTableExpr("bun_migrations").
+		ColumnExpr("COUNT(*)").
+		Where("name = ?", "ordsrc_000010_go_auth_0001").
+		Scan(ctx, &stableCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stableCount)
+
+	require.NoError(t, stable.RollbackAll(ctx, db))
+	assert.False(t, sqliteTableExists(t, db, "cleanup_auth"))
+}
+
+func TestMigrations_BackfillStableOrderedMigrationMarkersRejectsIncompleteLegacyMapping(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	authFS := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE incomplete_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE incomplete_auth;")},
+	}
+	usersFS := fstest.MapFS{
+		"0001_users.up.sql":   {Data: []byte("CREATE TABLE incomplete_users (id INTEGER PRIMARY KEY);")},
+		"0001_users.down.sql": {Data: []byte("DROP TABLE incomplete_users;")},
+	}
+
+	legacy := NewMigrations()
+	require.NoError(t, legacy.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: authFS},
+		OrderedMigrationSource{Name: "go-users", Root: usersFS},
+	))
+	require.NoError(t, legacy.Migrate(ctx, db))
+
+	var legacyAppliedCount int
+	err := db.NewSelect().
+		Model((*migrate.Migration)(nil)).
+		ModelTableExpr("bun_migrations").
+		ColumnExpr("COUNT(*)").
+		Where("name LIKE ?", "ord_%").
+		Scan(ctx, &legacyAppliedCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, legacyAppliedCount)
+
+	stable := NewMigrations()
+	require.NoError(t, stable.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+		NewStableOrderedMigrationSource("go-users", usersFS, "go-users", 20, WithOrderedMigrationDependencies("go-auth")),
+	))
+
+	err = stable.BackfillStableOrderedMigrationMarkers(ctx, db, []OrderedMigrationSource{
+		{Name: "go-auth", Root: authFS},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceRepair))
+	assert.True(t, errors.Is(err, ErrOrderedSourceRepairMissingMapping))
+	var repairErr *OrderedSourceRepairError
+	require.True(t, errors.As(err, &repairErr))
+	assert.Equal(t, "ord_000002_000001", repairErr.LegacyName)
+
+	var aliasCount int
+	err = db.NewSelect().
+		TableExpr("bun_ordered_migration_aliases").
+		ColumnExpr("COUNT(*)").
+		Scan(ctx, &aliasCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, aliasCount)
+
+	var stableAppliedCount int
+	err = db.NewSelect().
+		Model((*migrate.Migration)(nil)).
+		ModelTableExpr("bun_migrations").
+		ColumnExpr("COUNT(*)").
+		Where("name LIKE ?", "ordsrc_%").
+		Scan(ctx, &stableAppliedCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, stableAppliedCount)
+
+	err = stable.Rollback(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "registered migrations are missing applied migration definitions")
+}
+
+func TestMigrations_BackfillStableOrderedMigrationMarkersReturnsTypedMarkerMismatch(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	fsys := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE mismatch_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE mismatch_auth;")},
+	}
+
+	legacy := NewMigrations()
+	require.NoError(t, legacy.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: fsys},
+	))
+	require.NoError(t, legacy.Migrate(ctx, db))
+
+	stable := NewMigrations()
+	require.NoError(t, stable.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-accounts", fsys, "go-auth", 10),
+	))
+
+	err := stable.BackfillStableOrderedMigrationMarkers(ctx, db, []OrderedMigrationSource{
+		{Name: "go-auth", Root: fsys},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceRepair))
+	assert.True(t, errors.Is(err, ErrOrderedSourceRepairMarkerMismatch))
+	var repairErr *OrderedSourceRepairError
+	require.True(t, errors.As(err, &repairErr))
+	assert.Equal(t, "ord_000001_000001", repairErr.LegacyName)
+	assert.Equal(t, "go-auth", repairErr.SourceName)
+}
+
+func TestOrderedSourceRepairErrorMatching(t *testing.T) {
+	generic := &OrderedSourceRepairError{Kind: ErrOrderedSourceRepair}
+	assert.True(t, errors.Is(generic, ErrOrderedSourceRepair))
+
+	ambiguous := &OrderedSourceRepairError{Kind: ErrOrderedSourceRepairAmbiguousMarker}
+	assert.True(t, errors.Is(ambiguous, ErrOrderedSourceRepair))
+	assert.True(t, errors.Is(ambiguous, ErrOrderedSourceRepairAmbiguousMarker))
+	assert.False(t, errors.Is(ambiguous, ErrOrderedSourceDrift))
+
+	err := NewMigrations().BackfillStableOrderedMigrationMarkers(context.Background(), nil, nil)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceRepair))
+	var repairErr *OrderedSourceRepairError
+	assert.True(t, errors.As(err, &repairErr))
 }
 
 func TestMigrations_RollbackIgnoresUnrelatedAmbiguousSources(t *testing.T) {

@@ -2,6 +2,8 @@ package persistence
 
 import (
 	"context"
+	"errors"
+	"sort"
 	"testing"
 	"testing/fstest"
 
@@ -26,7 +28,7 @@ func TestCompileOrderedSourceMigrations_LayeredOverrideAndMetadata(t *testing.T)
 		"nested/ignored.up.txt": {Data: []byte("ignored")},
 	}
 
-	migrations, metadata, err := compileOrderedSourceMigrations("go-auth", 0, []migrationSourceLayer{
+	migrations, metadata, err := compileOrderedSourceMigrations(testOrderedRegistration("go-auth", 0), []migrationSourceLayer{
 		{fsys: base},
 		{fsys: override},
 	})
@@ -73,7 +75,7 @@ func TestCompileOrderedSourceMigrations_RejectDuplicateIdentity(t *testing.T) {
 		"0001_beta.up.sql":  {Data: []byte("SELECT 1;")},
 	}
 
-	_, _, err := compileOrderedSourceMigrations("go-auth", 0, []migrationSourceLayer{
+	_, _, err := compileOrderedSourceMigrations(testOrderedRegistration("go-auth", 0), []migrationSourceLayer{
 		{fsys: layer},
 	})
 	require.Error(t, err)
@@ -89,7 +91,7 @@ func TestCompileOrderedSourceMigrations_MigrationExecutionWiring(t *testing.T) {
 		"0001_alpha.up.sql": {Data: []byte("CREATE TABLE override_alpha;")},
 	}
 
-	compiled, _, err := compileOrderedSourceMigrations("go-auth", 0, []migrationSourceLayer{
+	compiled, _, err := compileOrderedSourceMigrations(testOrderedRegistration("go-auth", 0), []migrationSourceLayer{
 		{fsys: base},
 		{fsys: override},
 	})
@@ -115,6 +117,113 @@ func TestCompileOrderedSourceMigrations_MigrationExecutionWiring(t *testing.T) {
 	require.NoError(t, migration.Up(context.Background(), migrator, &migration))
 	require.NoError(t, migration.Down(context.Background(), migrator, &migration))
 	require.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestCompileOrderedSourceMigrations_SourceStableNames(t *testing.T) {
+	registration := orderedSourceRegistration{
+		name:             "Go Services",
+		sequence:         4,
+		identityMode:     OrderedMigrationIdentitySourceStable,
+		sourceKey:        "go_services",
+		sourceOrder:      50,
+		dependsOn:        []string{"go_auth"},
+		resolvedPosition: 2,
+	}
+	fsys := fstest.MapFS{
+		"0002_beta.up.sql":   {Data: []byte("SELECT 1;")},
+		"0002_beta.down.sql": {Data: []byte("SELECT 1;")},
+		"0001_alpha.up.sql":  {Data: []byte("SELECT 1;")},
+	}
+
+	migrations, metadata, err := compileOrderedSourceMigrations(registration, []migrationSourceLayer{{fsys: fsys}})
+	require.NoError(t, err)
+	require.Len(t, migrations, 2)
+
+	names := []string{migrations[0].Name, migrations[1].Name}
+	assert.Equal(t, []string{
+		"ordsrc_000050_go_services_0001",
+		"ordsrc_000050_go_services_0002",
+	}, names)
+
+	meta := metadata["ordsrc_000050_go_services_0001"]
+	assert.Equal(t, "go_services", meta.SourceKey)
+	assert.Equal(t, 50, meta.SourceOrder)
+	assert.Equal(t, []string{"go_auth"}, meta.SourceDependsOn)
+	assert.Equal(t, 2, meta.ResolvedPosition)
+	assert.Equal(t, OrderedMigrationIdentitySourceStable, meta.IdentityMode)
+}
+
+func TestNormalizeOrderedSourceKey(t *testing.T) {
+	cases := map[string]string{
+		"Go Services":         "go_services",
+		"go-services":         "go_services",
+		"GO_services":         "go_services",
+		" billing.api v2 !! ": "billing_api_v2",
+	}
+	for input, expected := range cases {
+		actual, err := normalizeOrderedSourceKey(input)
+		require.NoError(t, err)
+		assert.Equal(t, expected, actual)
+	}
+	_, err := normalizeOrderedSourceKey("!@#$")
+	require.Error(t, err)
+}
+
+func TestResolveOrderedSourceGraph_SourceStableOrderingAndErrors(t *testing.T) {
+	registrations := []orderedSourceRegistration{
+		{name: "users", sequence: 0, identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "users", sourceOrder: 30, dependsOn: []string{"auth"}},
+		{name: "auth", sequence: 1, identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "auth", sourceOrder: 10},
+		{name: "cms", sequence: 2, identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "cms", sourceOrder: 30},
+	}
+	resolved, err := resolveOrderedSourceGraph(registrations)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"auth", "cms", "users"}, []string{resolved[0].sourceKey, resolved[1].sourceKey, resolved[2].sourceKey})
+	assert.Equal(t, 3, resolved[2].resolvedPosition)
+
+	_, err = resolveOrderedSourceGraph([]orderedSourceRegistration{
+		{name: "a", identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "dup", sourceOrder: 10},
+		{name: "b", identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "dup", sourceOrder: 20},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceDuplicateKey))
+
+	_, err = resolveOrderedSourceGraph([]orderedSourceRegistration{
+		{name: "a", identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "a", sourceOrder: 10, dependsOn: []string{"missing"}},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceUnknownDep))
+
+	_, err = resolveOrderedSourceGraph([]orderedSourceRegistration{
+		{name: "a", identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "a", sourceOrder: 10},
+		{name: "b", identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "b", sourceOrder: 10, dependsOn: []string{"a"}},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceOrderInversion))
+}
+
+func TestResolveOrderedSourceGraph_DetectsCycle(t *testing.T) {
+	_, err := resolveOrderedSourceGraph([]orderedSourceRegistration{
+		{name: "a", identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "a", sourceOrder: 10, dependsOn: []string{"b"}},
+		{name: "b", identityMode: OrderedMigrationIdentitySourceStable, sourceKey: "b", sourceOrder: 20, dependsOn: []string{"a"}},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceCycle))
+}
+
+func TestOrderedStableSyntheticNamesSortLexically(t *testing.T) {
+	names := []string{
+		orderedStableSyntheticMigrationName(20, "users", "0001"),
+		orderedStableSyntheticMigrationName(10, "auth", "0002"),
+		orderedStableSyntheticMigrationName(10, "auth", "0001"),
+		orderedStableSyntheticMigrationName(10, "cms", "0001"),
+	}
+	sort.Strings(names)
+	assert.Equal(t, []string{
+		"ordsrc_000010_auth_0001",
+		"ordsrc_000010_auth_0002",
+		"ordsrc_000010_cms_0001",
+		"ordsrc_000020_users_0001",
+	}, names)
 }
 
 func TestOrderedMigrations_MetadataMapping(t *testing.T) {
@@ -147,4 +256,12 @@ func TestOrderedMigrations_MetadataMapping(t *testing.T) {
 	assert.Equal(t, "auth", meta.OriginalComment)
 	assert.Equal(t, "0001_auth.up.sql", meta.UpPath)
 	assert.Equal(t, "0001_auth.down.sql", meta.DownPath)
+}
+
+func testOrderedRegistration(name string, sequence int) orderedSourceRegistration {
+	return orderedSourceRegistration{
+		name:         name,
+		sequence:     sequence,
+		identityMode: OrderedMigrationIdentityPositional,
+	}
 }
