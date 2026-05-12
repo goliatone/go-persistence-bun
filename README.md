@@ -214,6 +214,21 @@ client.RegisterDialectMigrations(
 if err := client.ValidateDialects(context.Background()); err != nil {
     log.Fatal(err)
 }
+
+// Source-stable ordered package migrations
+err := client.RegisterOrderedMigrationSources(
+    persistence.NewStableOrderedMigrationSource("go-auth", authFS, "go-auth", 10),
+    persistence.NewStableOrderedMigrationSource(
+        "go-users",
+        usersFS,
+        "go-users",
+        20,
+        persistence.WithOrderedMigrationDependencies("go-auth"),
+    ),
+)
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 For detailed migration documentation, see [MIGRATIONS.md](MIGRATIONS.md).
@@ -319,6 +334,8 @@ users:
 - `LastPlan() *MigrationPlan`: Return the last resolved migration plan
 - `RegisterSQLMigrations(migrations ...fs.FS) *Migrations`: Register SQL migrations
 - `RegisterOrderedMigrationSources(sources ...OrderedMigrationSource) error`: Register ordered, source-aware SQL migration sources
+- `NewStableOrderedMigrationSource(...) OrderedMigrationSource`: Build a source-stable ordered source with explicit key/order/dependencies
+- `BackfillStableOrderedMigrationMarkers(...) error`: Repair legacy positional ordered markers for source-stable adoption
 - `GetMigrations() *Migrations`: Get migrations manager
 - `Rollback(ctx context.Context, opts ...migrate.MigrationOption) error`: Rollback one migration group
 - `RollbackAll(ctx context.Context, opts ...migrate.MigrationOption) error`: Rollback all migrations

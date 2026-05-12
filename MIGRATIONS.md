@@ -154,30 +154,42 @@ client.RegisterSQLMigrations(coreMigrations, featureMigrations)
 
 When multiple modules ship overlapping versions (for example many `0001_*.up.sql` files), use ordered sources to keep execution deterministic without renaming downstream files.
 
+Legacy ordered sources use registration position in synthetic names such as `ord_000001_000001`. That mode remains the zero-value behavior for compatibility.
+
+For new package compositions, prefer source-stable ordered sources. Source-stable mode uses an explicit source key and sparse order value in Bun migration names, for example `ordsrc_000020_go_users_0001`. The source key and order are migration ABI: do not rename or renumber them after they have shipped unless you run a deliberate compatibility repair.
+
 ```go
 orderedSources := []persistence.OrderedMigrationSource{
-    {
-        Name: "go-auth",
-        Root: authMigrationsFS,
-    },
-    {
-        Name: "go-users",
-        Root: usersMigrationsFS,
-    },
-    {
-        Name: "go-services",
-        Root: servicesMigrationsFS,
-        Options: []persistence.DialectMigrationOption{
+    persistence.NewStableOrderedMigrationSource(
+        "go-auth",
+        authMigrationsFS,
+        "go-auth",
+        10,
+    ),
+    persistence.NewStableOrderedMigrationSource(
+        "go-users",
+        usersMigrationsFS,
+        "go-users",
+        20,
+        persistence.WithOrderedMigrationDependencies("go-auth"),
+    ),
+    persistence.NewStableOrderedMigrationSource(
+        "go-services",
+        servicesMigrationsFS,
+        "go-services",
+        30,
+        persistence.WithOrderedMigrationDependencies("go-users"),
+        persistence.WithOrderedMigrationDialectOptions(
             persistence.WithValidationTargets("postgres", "sqlite"),
-        },
-    },
-    {
-        Name: "app-local",
-        Root: appMigrationsFS,
-        Options: []persistence.DialectMigrationOption{
-            persistence.WithDialectSourceLabel("app-local"),
-        },
-    },
+        ),
+    ),
+    persistence.NewStableOrderedMigrationSource(
+        "app-local",
+        appMigrationsFS,
+        "app-local",
+        100,
+        persistence.WithOrderedMigrationDependencies("go-services"),
+    ),
 }
 
 if err := client.RegisterOrderedMigrationSources(orderedSources...); err != nil {
@@ -187,16 +199,19 @@ if err := client.RegisterOrderedMigrationSources(orderedSources...); err != nil 
 
 Execution order is:
 
-1. source order as registered (`go-auth` → `go-users` → `go-services` → `app-local`)
+1. source-stable explicit order, then normalized source key
 2. migration version order inside each source
 
 Rollback is always the strict reverse of applied order.
+
+Use sparse order values such as `10`, `20`, `30`, and `100` so future independent sources can be inserted without renumbering existing source identities. `SourceLabel` remains diagnostic only; it is not durable identity.
 
 #### Collision Strategy
 
 - Migrations are tracked internally with a synthetic, source-aware identity.
 - This prevents collisions when different sources reuse the same version number.
 - Original source/version/file metadata is preserved for logs and debugging.
+- Source-stable names use explicit source order, normalized source key, and original migration version. Graph-resolved position is plan metadata only.
 
 #### Duplicate Checks
 
@@ -204,6 +219,7 @@ Rollback is always the strict reverse of applied order.
 - Duplicate migration identities within the same source/layer are rejected during discovery.
 - Dialect overrides still work with existing layer precedence (`common` → root → dialect).
 - If two plain or dialect registrations resolve to the same migration version, planning/execution now fails early with an ambiguity error. Use ordered sources when different packages intentionally reuse version numbers.
+- Source-stable ordered graphs reject duplicate source keys, unknown dependencies, dependency cycles, and dependency edges where the dependency has an equal or higher explicit order.
 
 #### Planning and Selective Execution
 
@@ -248,15 +264,34 @@ if err := client.MigrateSources(ctx, "go-auth"); err != nil {
 
 Selective planning/execution is only considered safe when the selected migrations do not share Bun migration names with excluded sources. If they do, the library now returns an explicit error and the long-term fix is to move those colliding trees into `RegisterOrderedMigrationSources`, which gives them source-aware synthetic names.
 
-#### Why There Is No Dependency Graph
+For source-stable ordered sources, selected execution also checks dependencies by normalized source key. Selecting `go-users` without selecting its required `go-auth` source fails clearly instead of silently expanding the selection.
 
-`OrderedMigrationSource` still uses registration order instead of explicit `depends_on` metadata.
+#### Source Graph Metadata And Repair
 
-- Registration order is already deterministic and easy to test.
-- Rollback semantics remain straightforward because Bun still rolls back in strict reverse application order.
-- Adding a dependency graph would increase surface area without improving the core ambiguity/visibility problem this package needs to solve.
+When source-stable mode is used, migration execution creates library-owned metadata tables:
 
-If your application needs a different order, register ordered sources in that order and confirm it with `Plan()` during startup.
+- `bun_ordered_migration_sources` stores source key, source name, order, dependencies, resolved position, identity mode, and a graph fingerprint.
+- `bun_ordered_migration_aliases` records legacy positional marker aliases created by repair/backfill.
+
+Before migration execution and rollback planning, persisted metadata is compared with the current graph. Unsafe key, order, dependency, resolved position, or fingerprint drift fails before Bun can skip or rerun migrations under a changed identity.
+
+Existing databases that already contain positional markers can be repaired without rerunning applied migrations:
+
+```go
+err := client.GetMigrations().BackfillStableOrderedMigrationMarkers(
+    ctx,
+    client.DB(),
+    []persistence.OrderedMigrationSource{
+        {Name: "go-auth", Root: authMigrationsFS},
+        {Name: "go-users", Root: usersMigrationsFS},
+    },
+)
+if err != nil {
+    log.Fatalf("backfill ordered migration markers: %v", err)
+}
+```
+
+The default repair path inserts source-stable applied markers and records aliases from old positional names to new source-stable names. It leaves old positional rows in `bun_migrations`; destructive cleanup requires `WithOrderedMigrationRepairCleanupLegacyMarkers(true)`.
 
 ### Dialect Specific Registration
 
