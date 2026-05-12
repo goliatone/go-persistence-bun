@@ -216,6 +216,19 @@ func normalizeOrderedSourceRegistration(source OrderedMigrationSource, name stri
 			Message:    fmt.Sprintf("ordered migration source %q must have a positive order in source-stable mode", name),
 		}
 	}
+	if source.Order > MaxOrderedMigrationSourceOrder {
+		return registration, &OrderedSourceGraphError{
+			Kind:       ErrOrderedSourceInvalidConfig,
+			SourceName: name,
+			SourceKey:  normalizedKey,
+			Message: fmt.Sprintf(
+				"ordered migration source %q order %d exceeds the source-stable maximum %d",
+				name,
+				source.Order,
+				MaxOrderedMigrationSourceOrder,
+			),
+		}
+	}
 
 	deps := make([]string, 0, len(source.DependsOn))
 	seenDeps := make(map[string]struct{}, len(source.DependsOn))
