@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing/fstest"
@@ -873,12 +874,7 @@ func (b dialectFSBuilder) shouldInclude(data []byte) bool {
 	if len(dialects) == 0 {
 		return true
 	}
-	for _, dialect := range dialects {
-		if dialect == b.dialect {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(dialects, b.dialect)
 }
 
 func openSubFS(fsys fs.FS, dir string) (fs.FS, bool, error) {

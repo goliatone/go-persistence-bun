@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"reflect"
 	"strconv"
@@ -57,9 +58,7 @@ func WithDropTables() FixtureOption {
 // WithTemplateFuncs are used to solve functions in seed file
 func WithTemplateFuncs(funcMap template.FuncMap) FixtureOption {
 	return func(s *Fixtures) {
-		for k, v := range funcMap {
-			s.funcMap[k] = v
-		}
+		maps.Copy(s.funcMap, funcMap)
 	}
 }
 
