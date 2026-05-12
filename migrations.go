@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 	"sync"
 
@@ -124,6 +125,7 @@ func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigration
 
 	seen := m.sourceNameSetLocked()
 
+	registrations := make([]orderedSourceRegistration, 0, len(sources))
 	for idx, source := range sources {
 		name := strings.TrimSpace(source.Name)
 		if name == "" {
@@ -137,6 +139,11 @@ func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigration
 		}
 		seen[name] = struct{}{}
 
+		registration, err := normalizeOrderedSourceRegistration(source, name, len(m.orderedRegistrations)+len(registrations))
+		if err != nil {
+			return err
+		}
+
 		opts := defaultDialectOptions()
 		for _, opt := range source.Options {
 			if opt == nil {
@@ -148,17 +155,107 @@ func (m *Migrations) RegisterOrderedMigrationSources(sources ...OrderedMigration
 			opts.sourceLabel = name
 		}
 
-		m.orderedRegistrations = append(m.orderedRegistrations, orderedSourceRegistration{
-			name:     name,
-			sequence: len(m.orderedRegistrations),
-			registration: dialectRegistration{
-				root: source.Root,
-				opts: opts,
-			},
-		})
+		registration.registration = dialectRegistration{
+			root: source.Root,
+			opts: opts,
+		}
+		registrations = append(registrations, registration)
 	}
 
+	if err := validateOrderedIdentityModeSet(append(append([]orderedSourceRegistration(nil), m.orderedRegistrations...), registrations...)); err != nil {
+		return err
+	}
+	m.orderedRegistrations = append(m.orderedRegistrations, registrations...)
+
 	return nil
+}
+
+func normalizeOrderedSourceRegistration(source OrderedMigrationSource, name string, sequence int) (orderedSourceRegistration, error) {
+	registration := orderedSourceRegistration{
+		name:         name,
+		sequence:     sequence,
+		identityMode: source.IdentityMode,
+	}
+
+	if source.IdentityMode == OrderedMigrationIdentityPositional {
+		if strings.TrimSpace(source.SourceKey) != "" || source.Order != 0 || len(source.DependsOn) > 0 {
+			return registration, &OrderedSourceGraphError{
+				Kind:       ErrOrderedSourceInvalidConfig,
+				SourceName: name,
+				Message:    fmt.Sprintf("ordered migration source %q supplies source-stable fields but does not opt into source-stable identity mode", name),
+			}
+		}
+		return registration, nil
+	}
+
+	if source.IdentityMode != OrderedMigrationIdentitySourceStable {
+		return registration, &OrderedSourceGraphError{
+			Kind:       ErrOrderedSourceInvalidConfig,
+			SourceName: name,
+			Message:    fmt.Sprintf("ordered migration source %q has unsupported identity mode %s", name, source.IdentityMode.String()),
+		}
+	}
+
+	key := strings.TrimSpace(source.SourceKey)
+	if key == "" {
+		key = name
+	}
+	normalizedKey, err := normalizeOrderedSourceKey(key)
+	if err != nil {
+		return registration, &OrderedSourceGraphError{
+			Kind:       ErrOrderedSourceInvalidConfig,
+			SourceName: name,
+			Message:    fmt.Sprintf("ordered migration source %q has invalid source key %q: %v", name, key, err),
+		}
+	}
+	if source.Order <= 0 {
+		return registration, &OrderedSourceGraphError{
+			Kind:       ErrOrderedSourceInvalidConfig,
+			SourceName: name,
+			SourceKey:  normalizedKey,
+			Message:    fmt.Sprintf("ordered migration source %q must have a positive order in source-stable mode", name),
+		}
+	}
+
+	deps := make([]string, 0, len(source.DependsOn))
+	seenDeps := make(map[string]struct{}, len(source.DependsOn))
+	for _, rawDependency := range source.DependsOn {
+		dependencyKey, depErr := normalizeOrderedSourceKey(rawDependency)
+		if depErr != nil {
+			return registration, &OrderedSourceGraphError{
+				Kind:       ErrOrderedSourceInvalidConfig,
+				SourceName: name,
+				SourceKey:  normalizedKey,
+				Dependency: rawDependency,
+				Message:    fmt.Sprintf("ordered migration source %q has invalid dependency key %q: %v", name, rawDependency, depErr),
+			}
+		}
+		if dependencyKey == normalizedKey {
+			return registration, &OrderedSourceGraphError{
+				Kind:       ErrOrderedSourceCycle,
+				SourceName: name,
+				SourceKey:  normalizedKey,
+				Dependency: dependencyKey,
+				Message:    fmt.Sprintf("ordered migration source %q cannot depend on itself", name),
+			}
+		}
+		if _, exists := seenDeps[dependencyKey]; exists {
+			continue
+		}
+		seenDeps[dependencyKey] = struct{}{}
+		deps = append(deps, dependencyKey)
+	}
+	sort.Strings(deps)
+
+	registration.sourceKey = normalizedKey
+	registration.sourceOrder = source.Order
+	registration.dependsOn = deps
+	return registration, nil
+}
+
+func validateOrderedIdentityModeSet(registrations []orderedSourceRegistration) error {
+	_, err := resolveOrderedSourceGraph(registrations)
+	return err
 }
 
 // ValidateDialects executes configured dialect validation callbacks.
@@ -278,6 +375,9 @@ func (m *Migrations) migrateWithSourceSelection(
 		return err
 	}
 	m.cacheResolvedPlan(resolved)
+	if verifyErr := m.verifyOrderedSourceGraph(ctx, db, resolved.orderedGraph); verifyErr != nil {
+		return verifyErr
+	}
 
 	if resolved.migrations != nil && len(resolved.migrations.Sorted()) > 0 {
 		sqlMigrationsGroup, err := m.run(ctx, db, resolved.migrations, resolved.entryByName)
@@ -287,6 +387,9 @@ func (m *Migrations) migrateWithSourceSelection(
 		m.migrations = sqlMigrationsGroup
 	} else {
 		m.logger().Debug("migrations: no SQL migrations found")
+	}
+	if err := m.persistOrderedSourceGraph(ctx, db, resolved.orderedGraph); err != nil {
+		return err
 	}
 
 	m.logger().Debug("migrations: all migration groups completed")
@@ -314,6 +417,9 @@ func (m *Migrations) Rollback(ctx context.Context, db *bun.DB, opts ...migrate.M
 	if sqlMigrations == nil {
 		m.logger().Debug("migrations: no migrations registered to roll back")
 		return nil
+	}
+	if verifyErr := m.verifyOrderedSourceGraph(ctx, db, resolved.orderedGraph); verifyErr != nil {
+		return verifyErr
 	}
 	m.cacheResolvedPlan(resolved)
 
@@ -358,6 +464,9 @@ func (m *Migrations) RollbackAll(ctx context.Context, db *bun.DB, opts ...migrat
 	if sqlMigrations == nil {
 		m.logger().Debug("migrations: no migrations registered to roll back")
 		return nil
+	}
+	if err := m.verifyOrderedSourceGraph(ctx, db, resolved.orderedGraph); err != nil {
+		return err
 	}
 	m.cacheResolvedPlan(resolved)
 
@@ -464,12 +573,17 @@ func (m *Migrations) cacheResolvedPlan(resolved *resolvedMigrationPlan) {
 			continue
 		}
 		orderedMetadata[name] = OrderedMigrationMetadata{
-			SyntheticName:   entry.SyntheticName,
-			SourceName:      entry.SourceName,
-			OriginalVersion: entry.OriginalVersion,
-			OriginalComment: entry.OriginalComment,
-			UpPath:          entry.UpPath,
-			DownPath:        entry.DownPath,
+			SyntheticName:    entry.SyntheticName,
+			SourceName:       entry.SourceName,
+			SourceKey:        entry.SourceKey,
+			SourceOrder:      entry.SourceOrder,
+			SourceDependsOn:  append([]string(nil), entry.SourceDependsOn...),
+			ResolvedPosition: entry.ResolvedPosition,
+			IdentityMode:     entry.IdentityMode,
+			OriginalVersion:  entry.OriginalVersion,
+			OriginalComment:  entry.OriginalComment,
+			UpPath:           entry.UpPath,
+			DownPath:         entry.DownPath,
 		}
 	}
 
@@ -562,6 +676,20 @@ func (m *Migrations) resolveRollbackMigrations(
 	db *bun.DB,
 	requiredNames map[string]struct{},
 ) (*migrate.Migrations, *resolvedMigrationPlan, error) {
+	if m.currentOrderedSourcesUseStableIdentity() {
+		aliases, err := m.orderedSourceAliases(ctx, db)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(aliases) > 0 {
+			for legacyName := range aliases {
+				delete(requiredNames, legacyName)
+			}
+		}
+	}
+	if len(requiredNames) == 0 {
+		return nil, nil, nil
+	}
 	resolved, err := m.resolvePlan(ctx, db, resolvePlanOptions{
 		requiredMigrationNames: requiredNames,
 	})
@@ -572,6 +700,13 @@ func (m *Migrations) resolveRollbackMigrations(
 		return nil, nil, nil
 	}
 	return resolved.migrations, resolved, nil
+}
+
+func (m *Migrations) currentOrderedSourcesUseStableIdentity() bool {
+	m.mx.Lock()
+	registrations := append([]orderedSourceRegistration(nil), m.orderedRegistrations...)
+	m.mx.Unlock()
+	return orderedSourcesUseStableIdentity(registrations)
 }
 
 func migrationNameSet(migrations migrate.MigrationSlice) map[string]struct{} {
