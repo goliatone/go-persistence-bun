@@ -222,11 +222,9 @@ func TestRunInTx_SQLiteConcurrencySanity(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, workers)
 
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		workerID := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 
 			txErr := RunInTx(ctx, db, func(ctx context.Context, tx bun.Tx) error {
 				record := &concurrencyRecord{
@@ -250,7 +248,7 @@ func TestRunInTx_SQLiteConcurrencySanity(t *testing.T) {
 				return
 			}
 			committed.Add(1)
-		}()
+		})
 	}
 
 	wg.Wait()

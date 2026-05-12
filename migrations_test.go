@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	iofs "io/fs"
+	"maps"
 	"os"
 	"strings"
 	"testing"
@@ -26,23 +27,23 @@ type MockLogger struct {
 	mock.Mock
 }
 
-func (m *MockLogger) Debug(msg string, keysAndValues ...interface{}) {
+func (m *MockLogger) Debug(msg string, keysAndValues ...any) {
 	m.Called(msg, keysAndValues)
 }
 
-func (m *MockLogger) Info(msg string, keysAndValues ...interface{}) {
+func (m *MockLogger) Info(msg string, keysAndValues ...any) {
 	m.Called(msg, keysAndValues)
 }
 
-func (m *MockLogger) Warn(msg string, keysAndValues ...interface{}) {
+func (m *MockLogger) Warn(msg string, keysAndValues ...any) {
 	m.Called(msg, keysAndValues)
 }
 
-func (m *MockLogger) Error(msg string, keysAndValues ...interface{}) {
+func (m *MockLogger) Error(msg string, keysAndValues ...any) {
 	m.Called(msg, keysAndValues)
 }
 
-func (m *MockLogger) Fatal(msg string, keysAndValues ...interface{}) {
+func (m *MockLogger) Fatal(msg string, keysAndValues ...any) {
 	m.Called(msg, keysAndValues)
 }
 
@@ -99,7 +100,7 @@ func TestMigrations_RegisterSQLMigrations_ThreadSafe(t *testing.T) {
 
 	// Create multiple filesystems
 	filesystems := make([]fstest.MapFS, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		filesystems[i] = fstest.MapFS{
 			"test.sql": {Data: []byte("SELECT 1;")},
 		}
@@ -107,7 +108,7 @@ func TestMigrations_RegisterSQLMigrations_ThreadSafe(t *testing.T) {
 
 	// Register concurrently
 	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(fs fstest.MapFS) {
 			m.RegisterSQLMigrations(fs)
 			done <- true
@@ -115,7 +116,7 @@ func TestMigrations_RegisterSQLMigrations_ThreadSafe(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 
@@ -1343,7 +1344,7 @@ func TestMigrations_BackfillStableOrderedMigrationMarkersRejectsIncompleteLegacy
 	assert.Contains(t, err.Error(), "registered migrations are missing applied migration definitions")
 }
 
-func TestMigrations_BackfillStableOrderedMigrationMarkersReturnsTypedMarkerMismatch(t *testing.T) {
+func TestMigrations_BackfillStableOrderedMigrationMarkersMatchesRenamedSourceBySourceKey(t *testing.T) {
 	ctx := context.Background()
 	db, cleanup := newSQLiteTestDB(t)
 	defer cleanup()
@@ -1364,6 +1365,38 @@ func TestMigrations_BackfillStableOrderedMigrationMarkersReturnsTypedMarkerMisma
 		NewStableOrderedMigrationSource("go-accounts", fsys, "go-auth", 10),
 	))
 
+	require.NoError(t, stable.BackfillStableOrderedMigrationMarkers(ctx, db, []OrderedMigrationSource{
+		{Name: "go-auth", Root: fsys},
+	}))
+
+	plan, err := stable.Plan(ctx, db)
+	require.NoError(t, err)
+	entry := planEntryBySourceAndVersion(t, plan, "go-accounts", "0001")
+	assert.Equal(t, "ordsrc_000010_go_auth_0001", entry.SyntheticName)
+	assert.True(t, entry.Applied)
+}
+
+func TestMigrations_BackfillStableOrderedMigrationMarkersReturnsTypedMarkerMismatch(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	fsys := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE mismatch_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE mismatch_auth;")},
+	}
+
+	legacy := NewMigrations()
+	require.NoError(t, legacy.RegisterOrderedMigrationSources(
+		OrderedMigrationSource{Name: "go-auth", Root: fsys},
+	))
+	require.NoError(t, legacy.Migrate(ctx, db))
+
+	stable := NewMigrations()
+	require.NoError(t, stable.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-accounts", fsys, "go-accounts", 10),
+	))
+
 	err := stable.BackfillStableOrderedMigrationMarkers(ctx, db, []OrderedMigrationSource{
 		{Name: "go-auth", Root: fsys},
 	})
@@ -1374,6 +1407,7 @@ func TestMigrations_BackfillStableOrderedMigrationMarkersReturnsTypedMarkerMisma
 	require.True(t, errors.As(err, &repairErr))
 	assert.Equal(t, "ord_000001_000001", repairErr.LegacyName)
 	assert.Equal(t, "go-auth", repairErr.SourceName)
+	assert.Equal(t, "go_auth", repairErr.SourceKey)
 }
 
 func TestOrderedSourceRepairErrorMatching(t *testing.T) {
@@ -1835,9 +1869,7 @@ func orderedSequenceFromMetadata(t *testing.T, manager *Migrations, migrations m
 
 	manager.mx.Lock()
 	metadata := make(map[string]OrderedMigrationMetadata, len(manager.orderedMetadata))
-	for k, v := range manager.orderedMetadata {
-		metadata[k] = v
-	}
+	maps.Copy(metadata, manager.orderedMetadata)
 	manager.mx.Unlock()
 
 	sequence := make([]string, 0, len(migrations))
