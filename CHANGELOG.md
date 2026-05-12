@@ -1,5 +1,31 @@
 # Changelog
 
+# [0.15.0](https://github.com/goliatone/go-persistence-bun/compare/v0.14.0...v0.15.0) - (2026-05-12)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Code quality ([c62c0d5](https://github.com/goliatone/go-persistence-bun/commit/c62c0d54c30bb802cbe3ab72731cfb6e61f63905))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.15.0 ([4a3dffc](https://github.com/goliatone/go-persistence-bun/commit/4a3dffc679d6bcdb340780677c663c052807a604))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Migration plan update ([2aee402](https://github.com/goliatone/go-persistence-bun/commit/2aee40281bbe50608f3112448dd82faed9437af8))  - (goliatone)
+- Ordered source graph ([1698713](https://github.com/goliatone/go-persistence-bun/commit/1698713ef84f724c07dca2664df4cf3342948b24))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.14.0 ([86fe3bf](https://github.com/goliatone/go-persistence-bun/commit/86fe3bfaa05f39885950a32af4cb3ce034565133))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update docs ([74e3586](https://github.com/goliatone/go-persistence-bun/commit/74e358627e6245b6d77582b7b86da96a8240e8cf))  - (goliatone)
+- Update tests ([f44ed1a](https://github.com/goliatone/go-persistence-bun/commit/f44ed1af1140429d750937cab336dc8e5be575fc))  - (goliatone)
+- Udpate tests ([83434f2](https://github.com/goliatone/go-persistence-bun/commit/83434f2d8d70a99bdffee74decfb46b8aa5f0e12))  - (goliatone)
+- Lint code quality setup ([4772d86](https://github.com/goliatone/go-persistence-bun/commit/4772d86bffb4e59b049d01b03117b87406c8ceb1))  - (goliatone)
+
 # [0.14.0](https://github.com/goliatone/go-persistence-bun/compare/v0.13.1...v0.14.0) - (2026-04-17)
 
 ## <!-- 1 -->🐛 Bug Fixes
