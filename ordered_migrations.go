@@ -121,6 +121,10 @@ type orderedSourceRegistration struct {
 
 type orderedDirection uint8
 
+// MaxOrderedMigrationSourceOrder is the largest explicit source-stable order
+// that fits the fixed-width lexical migration name prefix.
+const MaxOrderedMigrationSourceOrder = 999999
+
 const (
 	orderedDirectionUnknown orderedDirection = iota
 	orderedDirectionUp
