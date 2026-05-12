@@ -126,6 +126,19 @@ func validateStableOrderedSource(
 			Message:    fmt.Sprintf("ordered migration source %q must have a positive order in source-stable mode", registration.name),
 		}
 	}
+	if registration.sourceOrder > MaxOrderedMigrationSourceOrder {
+		return &OrderedSourceGraphError{
+			Kind:       ErrOrderedSourceInvalidConfig,
+			SourceName: registration.name,
+			SourceKey:  registration.sourceKey,
+			Message: fmt.Sprintf(
+				"ordered migration source %q order %d exceeds the source-stable maximum %d",
+				registration.name,
+				registration.sourceOrder,
+				MaxOrderedMigrationSourceOrder,
+			),
+		}
+	}
 	if registration.sourceKey == "" {
 		return &OrderedSourceGraphError{
 			Kind:       ErrOrderedSourceInvalidConfig,
