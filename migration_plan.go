@@ -50,7 +50,7 @@ type MigrationPlanEntry struct {
 	Dialect          string                       `json:"dialect,omitempty"`
 	Applied          bool                         `json:"applied"`
 	AppliedGroupID   int64                        `json:"applied_group_id,omitempty"`
-	AppliedAt        time.Time                    `json:"applied_at,omitempty"`
+	AppliedAt        time.Time                    `json:"applied_at"`
 }
 
 type migrationSourceLayer struct {

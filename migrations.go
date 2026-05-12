@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -522,9 +523,7 @@ func (m *Migrations) logMigrationGroup(migrations migrate.MigrationSlice) {
 	}
 	m.mx.Lock()
 	metadata := make(map[string]MigrationPlanEntry, len(m.planEntries))
-	for k, v := range m.planEntries {
-		metadata[k] = v
-	}
+	maps.Copy(metadata, m.planEntries)
 	m.mx.Unlock()
 	for _, migration := range migrations {
 		meta, ok := metadata[migration.Name]
