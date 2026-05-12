@@ -156,7 +156,7 @@ When multiple modules ship overlapping versions (for example many `0001_*.up.sql
 
 Legacy ordered sources use registration position in synthetic names such as `ord_000001_000001`. That mode remains the zero-value behavior for compatibility.
 
-For new package compositions, prefer source-stable ordered sources. Source-stable mode uses an explicit source key and sparse order value in Bun migration names, for example `ordsrc_000020_go_users_0001`. The source key and order are migration ABI: do not rename or renumber them after they have shipped unless you run a deliberate compatibility repair.
+For new package compositions, prefer source-stable ordered sources. Source-stable mode uses an explicit source key and sparse order value in Bun migration names, for example `ordsrc_000020_go_users_0001`. The source key and order are migration ABI: do not rename or renumber them after they have shipped unless you run a deliberate compatibility repair. Source-stable order values must be between `1` and `999999` so the fixed-width name prefix preserves Bun's lexical execution order.
 
 ```go
 orderedSources := []persistence.OrderedMigrationSource{
@@ -292,6 +292,8 @@ if err != nil {
 ```
 
 The default repair path inserts source-stable applied markers and records aliases from old positional names to new source-stable names. It leaves old positional rows in `bun_migrations`; destructive cleanup requires `WithOrderedMigrationRepairCleanupLegacyMarkers(true)`.
+
+Repair matches legacy positional markers to current source-stable migrations by normalized source key plus original migration version, not by source name. In the legacy source list, `SourceKey` is optional and defaults from `Name`; set it explicitly when the historical source name does not normalize to the current durable source key.
 
 ### Dialect Specific Registration
 
