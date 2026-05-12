@@ -286,7 +286,7 @@ func validateQueryHook(hook bun.QueryHook) error {
 		return ErrQueryHookNil
 	}
 	value := reflect.ValueOf(hook)
-	if value.Kind() == reflect.Ptr && value.IsNil() {
+	if value.Kind() == reflect.Pointer && value.IsNil() {
 		return ErrQueryHookNilPointer
 	}
 	return nil
@@ -303,7 +303,7 @@ func queryHookKey(hook bun.QueryHook) (string, bool) {
 		}
 	}
 	value := reflect.ValueOf(hook)
-	if value.Kind() == reflect.Ptr && !value.IsNil() {
+	if value.Kind() == reflect.Pointer && !value.IsNil() {
 		return fmt.Sprintf("%T:%x", hook, value.Pointer()), true
 	}
 	return "", false
