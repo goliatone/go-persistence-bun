@@ -212,10 +212,12 @@ func TestResolveOrderedSourceGraph_DetectsCycle(t *testing.T) {
 
 func TestOrderedStableSyntheticNamesSortLexically(t *testing.T) {
 	names := []string{
+		orderedStableSyntheticMigrationName(MaxOrderedMigrationSourceOrder, "last", "0001"),
 		orderedStableSyntheticMigrationName(20, "users", "0001"),
 		orderedStableSyntheticMigrationName(10, "auth", "0002"),
 		orderedStableSyntheticMigrationName(10, "auth", "0001"),
 		orderedStableSyntheticMigrationName(10, "cms", "0001"),
+		orderedStableSyntheticMigrationName(99998, "near_last", "0001"),
 	}
 	sort.Strings(names)
 	assert.Equal(t, []string{
@@ -223,7 +225,26 @@ func TestOrderedStableSyntheticNamesSortLexically(t *testing.T) {
 		"ordsrc_000010_auth_0002",
 		"ordsrc_000010_cms_0001",
 		"ordsrc_000020_users_0001",
+		"ordsrc_099998_near_last_0001",
+		"ordsrc_999999_last_0001",
 	}, names)
+}
+
+func TestOrderedStableSourceOrderMaximum(t *testing.T) {
+	fsys := fstest.MapFS{"0001_init.up.sql": {Data: []byte("SELECT 1;")}}
+
+	m := NewMigrations()
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("max", fsys, "max", MaxOrderedMigrationSourceOrder),
+	))
+
+	m = NewMigrations()
+	err := m.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("overflow", fsys, "overflow", MaxOrderedMigrationSourceOrder+1),
+	)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrderedSourceInvalidConfig))
+	assert.Contains(t, err.Error(), "exceeds the source-stable maximum")
 }
 
 func TestOrderedMigrations_MetadataMapping(t *testing.T) {

@@ -891,6 +891,34 @@ func TestMigrations_SourceStablePersistsAndDetectsGraphDrift(t *testing.T) {
 	require.Contains(t, err.Error(), "source_order")
 }
 
+func TestMigrations_SourceStablePlanningIsReadOnlyBeforeMetadataExists(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newSQLiteTestDB(t)
+	defer cleanup()
+
+	fsys := fstest.MapFS{
+		"0001_auth.up.sql":   {Data: []byte("CREATE TABLE readonly_plan_auth (id INTEGER PRIMARY KEY);")},
+		"0001_auth.down.sql": {Data: []byte("DROP TABLE readonly_plan_auth;")},
+	}
+
+	m := NewMigrations()
+	require.NoError(t, m.RegisterOrderedMigrationSources(
+		NewStableOrderedMigrationSource("go-auth", fsys, "go-auth", 10),
+	))
+
+	plan, err := m.Plan(ctx, db)
+	require.NoError(t, err)
+	require.Len(t, plan.Entries, 1)
+	assert.False(t, sqliteTableExists(t, db, "bun_ordered_migration_sources"))
+	assert.False(t, sqliteTableExists(t, db, "bun_ordered_migration_aliases"))
+
+	plan, err = m.PlanSources(ctx, db, "go-auth")
+	require.NoError(t, err)
+	require.Len(t, plan.Entries, 1)
+	assert.False(t, sqliteTableExists(t, db, "bun_ordered_migration_sources"))
+	assert.False(t, sqliteTableExists(t, db, "bun_ordered_migration_aliases"))
+}
+
 func TestMigrations_SourceStableDetectsAdditionalGraphDriftFields(t *testing.T) {
 	tests := []struct {
 		name       string
