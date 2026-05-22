@@ -318,7 +318,7 @@ func (m *Migrations) run(
 	migrations *migrate.Migrations,
 	entries map[string]MigrationPlanEntry,
 ) (*migrate.MigrationGroup, error) {
-	migrator := migrate.NewMigrator(db, migrations)
+	migrator := migrate.NewMigrator(db, migrations, migrate.WithMarkAppliedOnSuccess(true))
 	if err := migrator.Init(ctx); err != nil {
 		return nil, apierrors.Wrap(err, apierrors.CategoryOperation, "failed to initialize migrator")
 	}
