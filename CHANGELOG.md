@@ -1,5 +1,19 @@
 # Changelog
 
+# [0.16.1](https://github.com/goliatone/go-persistence-bun/compare/v0.16.0...v0.16.1) - (2026-05-22)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Migrator with mark applied on success ([281e191](https://github.com/goliatone/go-persistence-bun/commit/281e1913f6f0eb9bd4c7ffabd271e715fc2560a5))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.16.1 ([f88c95a](https://github.com/goliatone/go-persistence-bun/commit/f88c95aa9dd9088b9f50a0a0b085c961be8596f0))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.16.0 ([f358b9d](https://github.com/goliatone/go-persistence-bun/commit/f358b9dcab6687bf24a7c46e8da14829f609a20c))  - (goliatone)
+
 # [0.16.0](https://github.com/goliatone/go-persistence-bun/compare/v0.15.0...v0.16.0) - (2026-05-12)
 
 ## <!-- 1 -->🐛 Bug Fixes
