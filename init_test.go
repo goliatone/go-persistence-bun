@@ -121,7 +121,14 @@ func TestFixtures(t *testing.T) {
 		assert.Len(t, fixtures.dirs, 1)
 	})
 
-	t.Run("WithTrucateTables", func(t *testing.T) {
+	t.Run("WithTruncateTables", func(t *testing.T) {
+		fixtures = NewSeedManager(mockDB) // Reset fixtures
+		fixtures.AddOptions(WithTruncateTables())
+		fixtures.init()
+		assert.True(t, fixtures.truncate)
+	})
+
+	t.Run("WithTrucateTables compatibility alias", func(t *testing.T) {
 		fixtures = NewSeedManager(mockDB) // Reset fixtures
 		fixtures.AddOptions(WithTrucateTables())
 		fixtures.init()

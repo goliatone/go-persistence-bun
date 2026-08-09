@@ -293,6 +293,7 @@ Note: `GetDebug()` and `GetOtelIdentifier()` only affect query hooks when
 ### Fixture Options
 
 - `WithTruncateTables()`: Truncate tables before loading fixtures
+- `WithTrucateTables()`: Deprecated compatibility alias for `WithTruncateTables()`
 - `WithDropTables()`: Drop tables before loading fixtures
 - `WithFS(dir fs.FS)`: Add filesystem for fixtures/migrations
 - `WithTemplateFuncs(funcMap template.FuncMap)`: Add template functions for fixtures

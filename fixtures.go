@@ -41,11 +41,17 @@ func WithFS(dir fs.FS) FixtureOption {
 	}
 }
 
-// WithTrucateTables will truncate tables
-func WithTrucateTables() FixtureOption {
+// WithTruncateTables truncates fixture tables before loading.
+func WithTruncateTables() FixtureOption {
 	return func(s *Fixtures) {
 		s.truncate = true
 	}
+}
+
+// WithTrucateTables truncates fixture tables before loading.
+// Deprecated: use WithTruncateTables.
+func WithTrucateTables() FixtureOption {
+	return WithTruncateTables()
 }
 
 // WithDropTables will drop tables
