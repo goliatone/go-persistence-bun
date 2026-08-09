@@ -1,5 +1,27 @@
 # Changelog
 
+# [0.17.0](https://github.com/goliatone/go-persistence-bun/compare/v0.16.1...v0.17.0) - (2026-08-09)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Typo ([6a5bf1d](https://github.com/goliatone/go-persistence-bun/commit/6a5bf1ddbfdba6ef3f78325f300dbae7194e2be1))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.17.0 ([ed8fa3e](https://github.com/goliatone/go-persistence-bun/commit/ed8fa3eb29bf7998d38f135b399c8697f2a14670))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Fixture support JSON and data transform ([1ff4388](https://github.com/goliatone/go-persistence-bun/commit/1ff438855da89c66600ddbc188f3905afd27cee6))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.16.1 ([1383ce7](https://github.com/goliatone/go-persistence-bun/commit/1383ce7601f4f19f4429bed9be01e9a914c5a2ce))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update deps ([9b28e2b](https://github.com/goliatone/go-persistence-bun/commit/9b28e2bab5114cb8f6d4d1b77e995b959e169567))  - (goliatone)
+
 # [0.16.1](https://github.com/goliatone/go-persistence-bun/compare/v0.16.0...v0.16.1) - (2026-05-22)
 
 ## <!-- 1 -->🐛 Bug Fixes
