@@ -1,5 +1,28 @@
 # Changelog
 
+# [0.17.1](https://github.com/goliatone/go-persistence-bun/compare/v0.17.0...v0.17.1) - (2026-08-09)
+
+## <!-- 1 -->🐛 Bug Fixes
+
+- Code quality ([d93a2d2](https://github.com/goliatone/go-persistence-bun/commit/d93a2d263979452c47f62588a9b8636eed851c97))  - (goliatone)
+
+## <!-- 13 -->📦 Bumps
+
+- Bump version: v0.17.1 ([fb04f95](https://github.com/goliatone/go-persistence-bun/commit/fb04f95f71e4a2127061d9d7640ec56823f63ee9))  - (goliatone)
+
+## <!-- 16 -->➕ Add
+
+- Check cancellations and better logging ([6687a41](https://github.com/goliatone/go-persistence-bun/commit/6687a41789e82a5f304e7bac028fea803d5828e1))  - (goliatone)
+- Track fixture failures ([4eda0df](https://github.com/goliatone/go-persistence-bun/commit/4eda0dfb5fb83be87f54f7b43dcbdb025fe31b5e))  - (goliatone)
+
+## <!-- 3 -->📚 Documentation
+
+- Update changelog for v0.17.0 ([6259dc7](https://github.com/goliatone/go-persistence-bun/commit/6259dc7aa7499d7e45a5f530a85311ca588f5273))  - (goliatone)
+
+## <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Update readme ([9be42b5](https://github.com/goliatone/go-persistence-bun/commit/9be42b5701e9e06b767bde6e9811eb1c734268bf))  - (goliatone)
+
 # [0.17.0](https://github.com/goliatone/go-persistence-bun/compare/v0.16.1...v0.17.0) - (2026-08-09)
 
 ## <!-- 1 -->🐛 Bug Fixes
