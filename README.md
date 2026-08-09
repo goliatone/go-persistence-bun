@@ -336,6 +336,13 @@ buffer concurrently. Register all fixture options before the first load.
 One manager keeps Bun's table/row state across files and later load calls, and
 concurrent loading or option mutation on that manager is unsupported.
 
+When `Load` reports failures from one or more fixture filesystems, all original
+causes remain available through `errors.Is` and `errors.As`. Use
+`persistence.FixtureFailures(err)` to inspect the safe file, processing stage,
+and optional transform index for each failed file. Diagnostic renderers may
+allowlist `persistence.FixtureFailuresMetadataKey` to include the same records;
+fixture bytes and callback names are never added to this metadata.
+
 `WithFileFilter` remains the authoritative pre-read filter for directory loads
 and can exclude unrelated JSON before allocation. Direct `LoadFile` calls use
 the exact named path and do not consult the directory filter. Because JSON is
