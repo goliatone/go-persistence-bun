@@ -231,40 +231,48 @@ func normalizeOrderedSourceRegistration(source OrderedMigrationSource, name stri
 		}
 	}
 
-	deps := make([]string, 0, len(source.DependsOn))
-	seenDeps := make(map[string]struct{}, len(source.DependsOn))
-	for _, rawDependency := range source.DependsOn {
-		dependencyKey, depErr := normalizeOrderedSourceKey(rawDependency)
-		if depErr != nil {
-			return registration, &OrderedSourceGraphError{
-				Kind:       ErrOrderedSourceInvalidConfig,
-				SourceName: name,
-				SourceKey:  normalizedKey,
-				Dependency: rawDependency,
-				Message:    fmt.Sprintf("ordered migration source %q has invalid dependency key %q: %v", name, rawDependency, depErr),
-			}
-		}
-		if dependencyKey == normalizedKey {
-			return registration, &OrderedSourceGraphError{
-				Kind:       ErrOrderedSourceCycle,
-				SourceName: name,
-				SourceKey:  normalizedKey,
-				Dependency: dependencyKey,
-				Message:    fmt.Sprintf("ordered migration source %q cannot depend on itself", name),
-			}
-		}
-		if _, exists := seenDeps[dependencyKey]; exists {
-			continue
-		}
-		seenDeps[dependencyKey] = struct{}{}
-		deps = append(deps, dependencyKey)
+	deps, err := normalizeOrderedSourceDependencies(source.DependsOn, name, normalizedKey)
+	if err != nil {
+		return registration, err
 	}
-	sort.Strings(deps)
 
 	registration.sourceKey = normalizedKey
 	registration.sourceOrder = source.Order
 	registration.dependsOn = deps
 	return registration, nil
+}
+
+func normalizeOrderedSourceDependencies(rawDependencies []string, sourceName, sourceKey string) ([]string, error) {
+	dependencies := make([]string, 0, len(rawDependencies))
+	seen := make(map[string]struct{}, len(rawDependencies))
+	for _, rawDependency := range rawDependencies {
+		dependencyKey, err := normalizeOrderedSourceKey(rawDependency)
+		if err != nil {
+			return nil, &OrderedSourceGraphError{
+				Kind:       ErrOrderedSourceInvalidConfig,
+				SourceName: sourceName,
+				SourceKey:  sourceKey,
+				Dependency: rawDependency,
+				Message:    fmt.Sprintf("ordered migration source %q has invalid dependency key %q: %v", sourceName, rawDependency, err),
+			}
+		}
+		if dependencyKey == sourceKey {
+			return nil, &OrderedSourceGraphError{
+				Kind:       ErrOrderedSourceCycle,
+				SourceName: sourceName,
+				SourceKey:  sourceKey,
+				Dependency: dependencyKey,
+				Message:    fmt.Sprintf("ordered migration source %q cannot depend on itself", sourceName),
+			}
+		}
+		if _, exists := seen[dependencyKey]; exists {
+			continue
+		}
+		seen[dependencyKey] = struct{}{}
+		dependencies = append(dependencies, dependencyKey)
+	}
+	sort.Strings(dependencies)
+	return dependencies, nil
 }
 
 func validateOrderedIdentityModeSet(registrations []orderedSourceRegistration) error {
