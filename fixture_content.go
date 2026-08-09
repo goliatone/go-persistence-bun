@@ -28,6 +28,9 @@ func (s *Fixtures) transformFixtureContent(
 		if err != nil {
 			return nil, false, fixtureStageError(err, filePath, "transform", index)
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, false, fixtureStageError(err, filePath, "transform", index)
+		}
 		if result.Skip {
 			return nil, true, nil
 		}
@@ -79,6 +82,62 @@ func fixtureStageError(err error, filePath, stage string, transformIndex int) er
 	}
 	return apierrors.Wrap(err, apierrors.CategoryOperation, "fixture processing failed").
 		WithMetadata(metadata)
+}
+
+func collectFixtureFailures(err error, failures *[]FixtureFailure) {
+	if err == nil {
+		return
+	}
+
+	if richErr, ok := err.(*apierrors.Error); ok {
+		if aggregated, ok := richErr.Metadata[FixtureFailuresMetadataKey].([]FixtureFailure); ok {
+			*failures = append(*failures, cloneFixtureFailures(aggregated)...)
+			return
+		}
+		if failure, ok := fixtureFailureFromMetadata(richErr.Metadata); ok {
+			*failures = append(*failures, failure)
+			return
+		}
+	}
+
+	if joinedErr, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, childErr := range joinedErr.Unwrap() {
+			collectFixtureFailures(childErr, failures)
+		}
+		return
+	}
+	if wrappedErr, ok := err.(interface{ Unwrap() error }); ok {
+		collectFixtureFailures(wrappedErr.Unwrap(), failures)
+	}
+}
+
+func fixtureFailureFromMetadata(metadata map[string]any) (FixtureFailure, bool) {
+	filePath, hasFile := metadata["file"].(string)
+	stage, hasStage := metadata["stage"].(string)
+	if !hasFile || !hasStage {
+		return FixtureFailure{}, false
+	}
+
+	failure := FixtureFailure{File: filePath, Stage: stage}
+	if transformIndex, ok := metadata["transform_index"].(int); ok {
+		failure.TransformIndex = &transformIndex
+	}
+	return failure, true
+}
+
+func cloneFixtureFailures(failures []FixtureFailure) []FixtureFailure {
+	if len(failures) == 0 {
+		return nil
+	}
+	cloned := make([]FixtureFailure, len(failures))
+	for index, failure := range failures {
+		cloned[index] = failure
+		if failure.TransformIndex != nil {
+			transformIndex := *failure.TransformIndex
+			cloned[index].TransformIndex = &transformIndex
+		}
+	}
+	return cloned
 }
 
 type fixtureContentFS struct {

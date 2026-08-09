@@ -130,6 +130,34 @@ func TestFixturesSharedTransformLoading(t *testing.T) {
 	})
 }
 
+func TestFixturesDirectoryLogsTransformOutcome(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := newFixtureBoundaryDB(t, ctx)
+	defer cleanup()
+	logger := &fixtureCaptureLogger{}
+	fixtures := NewSeedManager(db,
+		WithFS(fstest.MapFS{
+			"01-skip.json": {Data: []byte(`{"name":"skip"}`)},
+			"02-load.json": {Data: []byte(`{"name":"load"}`)},
+		}),
+		WithFixtureTransform(func(_ context.Context, file FixtureFile) (FixtureTransformResult, error) {
+			if file.Path == "01-skip.json" {
+				return FixtureTransformResult{Skip: true}, nil
+			}
+			return FixtureTransformResult{Data: canonicalBoundaryFixture("loaded")}, nil
+		}),
+	)
+	fixtures.lgr = logger
+
+	require.NoError(t, fixtures.Load(ctx))
+
+	logs := strings.Join(logger.entries, "\n")
+	assert.Contains(t, logs, "skipping fixture file due to transformfile01-skip.json")
+	assert.NotContains(t, logs, "loading fixture filefile01-skip.json")
+	assert.Contains(t, logs, "loading fixture filefile02-load.json")
+	assert.NotContains(t, logs, "skipping fixture file due to transformfile02-load.json")
+}
+
 func TestFixturesTransformCancellation(t *testing.T) {
 	t.Run("before read", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -168,8 +196,52 @@ func TestFixturesTransformCancellation(t *testing.T) {
 
 		require.ErrorIs(t, err, context.Canceled)
 		assert.False(t, secondCalled)
-		index := 1
+		index := 0
 		assertFixtureErrorStage(t, err, "record.json", "transform", &index)
+	})
+
+	t.Run("skip after cancellation in LoadFile", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		secondCalled := false
+		fixtures := NewSeedManager(nil,
+			WithFS(fstest.MapFS{"record.json": {Data: []byte(`[]`)}}),
+			WithFixtureTransform(func(context.Context, FixtureFile) (FixtureTransformResult, error) {
+				cancel()
+				return FixtureTransformResult{Skip: true}, nil
+			}),
+			WithFixtureTransform(func(context.Context, FixtureFile) (FixtureTransformResult, error) {
+				secondCalled = true
+				return FixtureTransformResult{Skip: true}, nil
+			}),
+		)
+
+		err := fixtures.LoadFile(ctx, "record.json")
+
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, secondCalled)
+		index := 0
+		assertFixtureErrorStage(t, err, "record.json", "transform", &index)
+	})
+
+	t.Run("skip after cancellation in Load", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		secondCalled := false
+		fixtures := NewSeedManager(nil,
+			WithFS(fstest.MapFS{"record.json": {Data: []byte(`[]`)}}),
+			WithFixtureTransform(func(context.Context, FixtureFile) (FixtureTransformResult, error) {
+				cancel()
+				return FixtureTransformResult{Skip: true}, nil
+			}),
+			WithFixtureTransform(func(context.Context, FixtureFile) (FixtureTransformResult, error) {
+				secondCalled = true
+				return FixtureTransformResult{Skip: true}, nil
+			}),
+		)
+
+		err := fixtures.Load(ctx)
+
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, secondCalled)
 	})
 
 	t.Run("after final callback before consume", func(t *testing.T) {
@@ -187,7 +259,8 @@ func TestFixturesTransformCancellation(t *testing.T) {
 		err := fixtures.LoadFile(ctx, "record.json")
 
 		require.ErrorIs(t, err, context.Canceled)
-		assertFixtureErrorStage(t, err, "record.json", "consume", nil)
+		index := 0
+		assertFixtureErrorStage(t, err, "record.json", "transform", &index)
 		assert.Empty(t, fixtureBoundaryNames(t, db, context.Background()))
 	})
 }
@@ -416,6 +489,10 @@ func TestFixturesFailureClassification(t *testing.T) {
 
 		require.ErrorIs(t, err, cause)
 		assertFixtureErrorStage(t, err, "record.json", "read", nil)
+		assert.Equal(t, []FixtureFailure{{
+			File:  "record.json",
+			Stage: "read",
+		}}, FixtureFailures(err))
 	})
 
 	t.Run("transform failure is not treated as not found", func(t *testing.T) {
@@ -449,6 +526,10 @@ func TestFixturesFailureClassification(t *testing.T) {
 
 		require.Error(t, err)
 		assertFixtureErrorStage(t, err, "record.json", "consume", nil)
+		assert.Equal(t, []FixtureFailure{{
+			File:  "record.json",
+			Stage: "consume",
+		}}, FixtureFailures(err))
 	})
 
 	t.Run("final lookup failure", func(t *testing.T) {
@@ -471,10 +552,10 @@ func TestFixturesLoadAggregatesFilesystemErrors(t *testing.T) {
 	firstCause := errors.New("first fixture source failed")
 	secondCause := errors.New("second fixture source failed")
 	fixtures := NewSeedManager(nil,
-		WithFS(fstest.MapFS{"first.json": {Data: []byte("first")}}),
-		WithFS(fstest.MapFS{"second.json": {Data: []byte("second")}}),
+		WithFS(fstest.MapFS{"first.json": {Data: []byte("FIRST-PRIVATE-FIXTURE")}}),
+		WithFS(fstest.MapFS{"second.json": {Data: []byte("SECOND-PRIVATE-FIXTURE")}}),
 		WithFixtureTransform(func(_ context.Context, file FixtureFile) (FixtureTransformResult, error) {
-			if string(file.Data) == "first" {
+			if file.Path == "first.json" {
 				return FixtureTransformResult{}, firstCause
 			}
 			return FixtureTransformResult{}, secondCause
@@ -486,6 +567,37 @@ func TestFixturesLoadAggregatesFilesystemErrors(t *testing.T) {
 	require.ErrorIs(t, err, firstCause)
 	require.ErrorIs(t, err, secondCause)
 	assert.True(t, apierrors.IsCategory(err, apierrors.CategoryOperation))
+
+	zero := 0
+	wantFailures := []FixtureFailure{
+		{File: "first.json", Stage: "transform", TransformIndex: &zero},
+		{File: "second.json", Stage: "transform", TransformIndex: &zero},
+	}
+	assert.Equal(t, wantFailures, FixtureFailures(err))
+
+	var richErr *apierrors.Error
+	require.ErrorAs(t, err, &richErr)
+	assert.Equal(t, wantFailures, richErr.Metadata[FixtureFailuresMetadataKey])
+
+	failures := FixtureFailures(err)
+	failures[0].File = "mutated.json"
+	*failures[0].TransformIndex = 99
+	assert.Equal(t, wantFailures, FixtureFailures(err))
+
+	renderer, rendererErr := apierrors.NewRenderer(
+		apierrors.OutputDiagnostic,
+		apierrors.WithMetadataAllowlist(FixtureFailuresMetadataKey),
+	)
+	require.NoError(t, rendererErr)
+	diagnostic, renderErr := renderer.FormatDiagnostic(err)
+	require.NoError(t, renderErr)
+	assert.Contains(t, diagnostic, "first.json")
+	assert.Contains(t, diagnostic, "second.json")
+	assert.Contains(t, diagnostic, "transform_index")
+	assert.NotContains(t, diagnostic, "FIRST-PRIVATE-FIXTURE")
+	assert.NotContains(t, diagnostic, "SECOND-PRIVATE-FIXTURE")
+	assert.NotContains(t, diagnostic, firstCause.Error())
+	assert.NotContains(t, diagnostic, secondCause.Error())
 }
 
 func TestFixturesControlledErrorsAndLogsDoNotLeakContent(t *testing.T) {
@@ -503,6 +615,12 @@ func TestFixturesControlledErrorsAndLogsDoNotLeakContent(t *testing.T) {
 	err := fixtures.LoadFile(context.Background(), "private/source.json")
 
 	require.ErrorIs(t, err, callbackCause)
+	zero := 0
+	assert.Equal(t, []FixtureFailure{{
+		File:           "private/source.json",
+		Stage:          "transform",
+		TransformIndex: &zero,
+	}}, FixtureFailures(err))
 	publicJSON, marshalErr := json.Marshal(err)
 	require.NoError(t, marshalErr)
 	renderer, rendererErr := apierrors.NewRenderer(
