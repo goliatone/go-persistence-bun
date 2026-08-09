@@ -62,6 +62,27 @@ type FixtureTransformResult struct {
 // available through errors.Is and errors.As.
 type FixtureTransform func(context.Context, FixtureFile) (FixtureTransformResult, error)
 
+// FixtureFailuresMetadataKey is the rich-error metadata key containing the
+// []FixtureFailure records collected by a directory Load.
+const FixtureFailuresMetadataKey = "fixture_failures"
+
+// FixtureFailure identifies one safely reportable fixture-processing failure.
+// TransformIndex is set only when Stage is "transform".
+type FixtureFailure struct {
+	File           string `json:"file"`
+	Stage          string `json:"stage"`
+	TransformIndex *int   `json:"transform_index,omitempty"`
+}
+
+// FixtureFailures returns defensive copies of the fixture-processing failures
+// represented by err, in discovery order. It supports errors returned by both
+// Load and LoadFile.
+func FixtureFailures(err error) []FixtureFailure {
+	var failures []FixtureFailure
+	collectFixtureFailures(err, &failures)
+	return cloneFixtureFailures(failures)
+}
+
 // WithFS adds a fixture filesystem.
 func WithFS(dir fs.FS) FixtureOption {
 	return func(s *Fixtures) {
@@ -195,7 +216,11 @@ func (s *Fixtures) Load(ctx context.Context) error {
 
 	if len(allErrors) > 0 {
 		joinedErr := apierrors.Join(allErrors...)
-		return apierrors.Wrap(joinedErr, apierrors.CategoryOperation, "one or more errors occurred during fixture loading")
+		loadErr := apierrors.Wrap(joinedErr, apierrors.CategoryOperation, "one or more errors occurred during fixture loading")
+		if failures := FixtureFailures(joinedErr); len(failures) > 0 {
+			loadErr = loadErr.WithMetadata(map[string]any{FixtureFailuresMetadataKey: failures})
+		}
+		return loadErr
 	}
 
 	return nil
@@ -218,9 +243,14 @@ func (s *Fixtures) load(ctx context.Context, dir fs.FS) error {
 			return nil
 		}
 
-		s.lgr.Debug("loading fixture file", "file", path)
-		if _, loadErr := s.loadFixtureFile(ctx, dir, path); loadErr != nil {
+		skipped, loadErr := s.loadFixtureFile(ctx, dir, path)
+		if loadErr != nil {
 			return loadErr
+		}
+		if skipped {
+			s.lgr.Debug("skipping fixture file due to transform", "file", path)
+		} else {
+			s.lgr.Debug("loading fixture file", "file", path)
 		}
 
 		return nil
