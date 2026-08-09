@@ -235,6 +235,21 @@ For detailed migration documentation, see [MIGRATIONS.md](MIGRATIONS.md).
 
 ### Fixtures
 
+Fixture directory loading accepts `.yml`, `.yaml`, and `.json` files
+case-insensitively. JSON must use Bun's canonical model-and-rows fixture shape,
+for example:
+
+```json
+[
+  {
+    "model": "User",
+    "rows": [
+      { "_id": "admin", "email": "admin@example.com" }
+    ]
+  }
+]
+```
+
 ```go
 // Register fixtures
 client.RegisterFixtures(fixtures.FS)
@@ -244,6 +259,93 @@ if err := client.Seed(context.Background()); err != nil {
     log.Fatal(err)
 }
 ```
+
+Use `WithFixtureTransform` when a source file is not already in Bun's canonical
+shape. Transforms run synchronously in registration order after the file is read
+and before Bun decodes fields or evaluates templates. Each transform receives
+the previous transform's output:
+
+```go
+manager := client.RegisterFixtures(fixtures.FS).AddOptions(
+    persistence.WithFixtureTransform(decompressFixture),
+    persistence.WithFixtureTransform(adaptSourceEnvelope),
+)
+
+if err := manager.Load(ctx); err != nil {
+    return err
+}
+```
+
+`FixtureFile.Path` is the exact slash-separated `fs.FS` path and
+`FixtureFile.Name` is `path.Base(Path)`. Return `Skip: true` to omit a matched
+file after inspecting its content; an empty or nil `Data` value without `Skip`
+is still passed to Bun as fixture content. Errors take precedence over `Skip`.
+
+The following application-owned adapter converts a source `{ "data": [...] }`
+envelope while skipping an endpoint that does not seed a persistence model:
+
+```go
+type customerEnvelope struct {
+    Data []struct {
+        ExternalID  string `json:"external_id"`
+        DisplayName string `json:"display_name"`
+    } `json:"data"`
+}
+
+func adaptSourceEnvelope(
+    ctx context.Context,
+    file persistence.FixtureFile,
+) (persistence.FixtureTransformResult, error) {
+    if err := ctx.Err(); err != nil {
+        return persistence.FixtureTransformResult{}, err
+    }
+    if file.Name == "audit-events.json" {
+        return persistence.FixtureTransformResult{Skip: true}, nil
+    }
+    if file.Name != "customers.json" {
+        return persistence.FixtureTransformResult{Data: file.Data}, nil
+    }
+
+    var source customerEnvelope
+    if err := json.Unmarshal(file.Data, &source); err != nil {
+        // Keep returned errors free of fixture values; the cause remains inspectable.
+        return persistence.FixtureTransformResult{}, fmt.Errorf("decode customer envelope: %w", err)
+    }
+
+    rows := make([]map[string]any, 0, len(source.Data))
+    for _, customer := range source.Data {
+        rows = append(rows, map[string]any{
+            "external_id": customer.ExternalID,
+            "name":        customer.DisplayName,
+        })
+    }
+    data, err := json.Marshal([]map[string]any{{
+        "model": "Customer",
+        "rows":  rows,
+    }})
+    if err != nil {
+        return persistence.FixtureTransformResult{}, fmt.Errorf("encode customer fixture: %w", err)
+    }
+    return persistence.FixtureTransformResult{Data: data}, nil
+}
+```
+
+Transforms receive borrowed input bytes, and their successful output becomes
+owned by the loading pipeline; callbacks must not retain and mutate either
+buffer concurrently. Register all fixture options before the first load.
+One manager keeps Bun's table/row state across files and later load calls, and
+concurrent loading or option mutation on that manager is unsupported.
+
+`WithFileFilter` remains the authoritative pre-read filter for directory loads
+and can exclude unrelated JSON before allocation. Direct `LoadFile` calls use
+the exact named path and do not consult the directory filter. Because JSON is
+now eligible by default, keep fixtures in a dedicated filesystem or install a
+custom filter when other JSON files are colocated.
+
+Fixture transforms are intended for seed/model construction. If imported data
+requires domain normalization, provenance, authorization, or state-transition
+rules, dispatch the application's business commands instead of writing models
+directly through fixtures.
 
 ### Model Registration
 
@@ -298,6 +400,7 @@ Note: `GetDebug()` and `GetOtelIdentifier()` only affect query hooks when
 - `WithFS(dir fs.FS)`: Add filesystem for fixtures/migrations
 - `WithTemplateFuncs(funcMap template.FuncMap)`: Add template functions for fixtures
 - `WithFileFilter(fn func(path, name string) bool)`: Custom file filtering
+- `WithFixtureTransform(transform FixtureTransform)`: Inspect, transform, or explicitly skip fixture content before Bun decoding
 
 ### Fixture Template Functions
 
