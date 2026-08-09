@@ -117,28 +117,28 @@ func TestFixtures(t *testing.T) {
 			"test.yml": &fstest.MapFile{Data: []byte("test: data")},
 		}
 		fixtures.AddOptions(WithFS(fsys))
-		fixtures.init()
+		assert.NoError(t, fixtures.init())
 		assert.Len(t, fixtures.dirs, 1)
 	})
 
 	t.Run("WithTruncateTables", func(t *testing.T) {
 		fixtures = NewSeedManager(mockDB) // Reset fixtures
 		fixtures.AddOptions(WithTruncateTables())
-		fixtures.init()
+		assert.NoError(t, fixtures.init())
 		assert.True(t, fixtures.truncate)
 	})
 
 	t.Run("WithTrucateTables compatibility alias", func(t *testing.T) {
 		fixtures = NewSeedManager(mockDB) // Reset fixtures
 		fixtures.AddOptions(WithTrucateTables())
-		fixtures.init()
+		assert.NoError(t, fixtures.init())
 		assert.True(t, fixtures.truncate)
 	})
 
 	t.Run("WithDropTables", func(t *testing.T) {
 		fixtures = NewSeedManager(mockDB) // Reset fixtures
 		fixtures.AddOptions(WithDropTables())
-		fixtures.init()
+		assert.NoError(t, fixtures.init())
 		assert.True(t, fixtures.drop)
 	})
 }
@@ -198,7 +198,7 @@ func TestFixturesLoad(t *testing.T) {
 	})
 
 	t.Run("Initialize Without Options", func(t *testing.T) {
-		fixtures.init()
+		assert.NoError(t, fixtures.init())
 		assert.NotNil(t, fixtures.fixture)
 	})
 }

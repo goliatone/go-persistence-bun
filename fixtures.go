@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"reflect"
 	"strconv"
 	"strings"
@@ -18,23 +19,50 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Fixtures manages fixtures and seeds
+// Fixtures manages YAML and JSON fixture files and their shared Bun fixture state.
 type Fixtures struct {
-	dirs       []fs.FS
-	db         *bun.DB
-	truncate   bool
-	drop       bool
-	funcMap    template.FuncMap
-	fixture    *dbfixture.Fixture
-	opts       []FixtureOption
-	FileFilter func(path, name string) bool
-	lgr        Logger
+	dirs        []fs.FS
+	db          *bun.DB
+	truncate    bool
+	drop        bool
+	funcMap     template.FuncMap
+	fixture     *dbfixture.Fixture
+	opts        []FixtureOption
+	optsApplied bool
+	transforms  []FixtureTransform
+	FileFilter  func(path, name string) bool
+	lgr         Logger
 }
 
 // FixtureOption configures the seed manager
 type FixtureOption func(s *Fixtures)
 
-// WithFS will truncate tables
+// FixtureFile is the content and stable identity passed to a fixture transform.
+// Path is the exact slash-separated fs.FS path and Name is path.Base(Path).
+// Data is borrowed for the duration of the callback and must not be retained and
+// mutated concurrently.
+type FixtureFile struct {
+	Path string
+	Name string
+	Data []byte
+}
+
+// FixtureTransformResult is the outcome of a fixture content transform.
+// Skip explicitly omits the matched file; nil or empty Data without Skip is
+// passed to Bun as real fixture content.
+type FixtureTransformResult struct {
+	Data []byte
+	Skip bool
+}
+
+// FixtureTransform inspects or transforms fixture bytes after reading and
+// before Bun decodes templates and fields. The returned Data becomes owned by
+// the loading pipeline and must not be retained and mutated concurrently.
+// Transform errors must not contain fixture content because the cause remains
+// available through errors.Is and errors.As.
+type FixtureTransform func(context.Context, FixtureFile) (FixtureTransformResult, error)
+
+// WithFS adds a fixture filesystem.
 func WithFS(dir fs.FS) FixtureOption {
 	return func(s *Fixtures) {
 		s.dirs = append(s.dirs, dir)
@@ -54,48 +82,76 @@ func WithTrucateTables() FixtureOption {
 	return WithTruncateTables()
 }
 
-// WithDropTables will drop tables
+// WithDropTables drops and recreates fixture tables before loading.
 func WithDropTables() FixtureOption {
 	return func(l *Fixtures) {
 		l.drop = true
 	}
 }
 
-// WithTemplateFuncs are used to solve functions in seed file
+// WithTemplateFuncs adds functions used while evaluating fixture templates.
 func WithTemplateFuncs(funcMap template.FuncMap) FixtureOption {
 	return func(s *Fixtures) {
 		maps.Copy(s.funcMap, funcMap)
 	}
 }
 
-// WithFileFilter will add a file filter function.
-// Each file found in the given dir will be passed throu
-// this function, and if it returns false the file will
-// be filtered out.
+// WithFileFilter replaces the pre-read filter used by directory Load calls.
+// Each discovered path is passed to fn; returning false prevents the file from
+// being read. LoadFile does not consult this filter.
 func WithFileFilter(fn func(path, name string) bool) FixtureOption {
 	return func(s *Fixtures) {
 		s.FileFilter = fn
 	}
 }
 
-// NewSeedManager generates a new seed manger
+// WithFixtureTransform appends a fixture content transform. Transforms run
+// synchronously in registration order. Configure transforms before the first
+// Load or LoadFile call; options added after lazy initialization are not applied.
+func WithFixtureTransform(transform FixtureTransform) FixtureOption {
+	return func(s *Fixtures) {
+		s.transforms = append(s.transforms, transform)
+	}
+}
+
+// NewSeedManager creates a lazily initialized fixture manager.
 func NewSeedManager(db *bun.DB, opts ...FixtureOption) *Fixtures {
 	s := &Fixtures{
 		db:      db,
 		opts:    opts,
 		funcMap: defaultFuncs(),
 		lgr:     &defaultLogger{},
-		FileFilter: func(path, name string) bool {
-			return strings.HasSuffix(path, ".yml") || strings.HasSuffix(path, ".yaml")
+		FileFilter: func(filePath, _ string) bool {
+			switch strings.ToLower(path.Ext(filePath)) {
+			case ".yml", ".yaml", ".json":
+				return true
+			default:
+				return false
+			}
 		},
 	}
 
 	return s
 }
 
-func (s *Fixtures) init() {
-	for _, o := range s.opts {
-		o(s)
+func (s *Fixtures) init() error {
+	if !s.optsApplied {
+		for _, o := range s.opts {
+			if o == nil {
+				continue
+			}
+			o(s)
+		}
+		s.optsApplied = true
+	}
+	for index, transform := range s.transforms {
+		if transform == nil {
+			return apierrors.New("invalid fixture transform configuration", apierrors.CategoryBadInput).
+				WithMetadata(map[string]any{
+					"stage":           "configuration",
+					"transform_index": index,
+				})
+		}
 	}
 
 	opts := []dbfixture.FixtureOption{}
@@ -111,9 +167,11 @@ func (s *Fixtures) init() {
 
 	// Recreate will drop existing table
 	s.fixture = dbfixture.New(s.db, opts...)
+	return nil
 }
 
-// AddOptions will configure options
+// AddOptions appends options before lazy initialization. Options added after the
+// first Load or LoadFile call are not applied.
 func (s *Fixtures) AddOptions(opts ...FixtureOption) *Fixtures {
 	s.opts = append(s.opts, opts...)
 	return s
@@ -123,7 +181,9 @@ func (s *Fixtures) AddOptions(opts ...FixtureOption) *Fixtures {
 // It returns a rich error if any part of the process fails.
 func (s *Fixtures) Load(ctx context.Context) error {
 	if s.fixture == nil {
-		s.init()
+		if err := s.init(); err != nil {
+			return err
+		}
 	}
 
 	var allErrors []error
@@ -159,9 +219,8 @@ func (s *Fixtures) load(ctx context.Context, dir fs.FS) error {
 		}
 
 		s.lgr.Debug("loading fixture file", "file", path)
-		if loadErr := s.fixture.Load(ctx, dir, path); loadErr != nil {
-			return apierrors.Wrap(loadErr, apierrors.CategoryOperation, "failed to load fixture data").
-				WithMetadata(map[string]any{"file": path})
+		if _, loadErr := s.loadFixtureFile(ctx, dir, path); loadErr != nil {
+			return loadErr
 		}
 
 		return nil
@@ -171,7 +230,9 @@ func (s *Fixtures) load(ctx context.Context, dir fs.FS) error {
 // LoadFile will search for and load a single file across all configured directories.
 func (s *Fixtures) LoadFile(ctx context.Context, file string) error {
 	if s.fixture == nil {
-		s.init()
+		if err := s.init(); err != nil {
+			return err
+		}
 	}
 
 	if len(s.dirs) == 0 {
@@ -181,17 +242,18 @@ func (s *Fixtures) LoadFile(ctx context.Context, file string) error {
 
 	var lastErr error
 	for _, dir := range s.dirs {
-		err := s.fixture.Load(ctx, dir, file)
+		skipped, err := s.loadFixtureFile(ctx, dir, file)
 		if err == nil {
-			s.lgr.Debug("loading fixture file", "file", file)
+			if skipped {
+				s.lgr.Debug("skipping fixture file due to transform", "file", file)
+			} else {
+				s.lgr.Debug("loading fixture file", "file", file)
+			}
 			return nil
 		}
 
 		if !apierrors.Is(err, os.ErrNotExist) {
-			return apierrors.Wrap(err, apierrors.CategoryOperation, "failed to load fixture file").
-				WithMetadata(map[string]any{
-					"file": file,
-				})
+			return err
 		}
 
 		lastErr = err
